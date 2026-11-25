@@ -4,46 +4,39 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="csrf" content="{{ csrf }}">
-<title>LunaRelay</title>
+<title>{{ '管理控制台' if admin else '用户服务台' }} · LunaRelay</title>
 <style>
-*{box-sizing:border-box}body{margin:0;background:#eef2f5;color:#182830;font:15px/1.55 system-ui,sans-serif}
-header{background:#142e35;color:#fff;padding:24px max(24px,calc((100% - 1120px)/2));display:flex;align-items:center;justify-content:space-between}
-header strong{font-size:24px;letter-spacing:.02em}main{max-width:1160px;margin:auto;padding:28px 20px 70px}
-h1,h2,h3,p{margin:0 0 12px}h1{font-size:30px}h2{font-size:20px}h3{font-size:16px}p{color:#465860}
-section{padding:22px;background:white;border-radius:12px;border:1px solid #dce5e9;margin:0 0 18px;min-width:0}
-nav{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:20px}a{color:#086751}nav a{padding:5px 10px;background:#d8e9e4;border-radius:6px}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,290px),1fr));gap:16px}.grid>section{margin:0}
-form{display:flex;gap:9px;align-items:end;flex-wrap:wrap;margin:10px 0}label{display:grid;gap:3px;flex:1;min-width:145px}
-input,select,button{font:inherit;border-radius:6px;padding:8px 10px;border:1px solid #a9b9bd;min-width:0}input[type=checkbox]{justify-self:start}
-button{background:#075b49;border-color:#075b49;color:white;cursor:pointer}button:disabled{opacity:.5}button.secondary{background:#e0efeb;color:#154b3f}
-button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{outline:3px solid #009672;outline-offset:2px}
-pre{background:#f1f6f7;padding:12px;border-radius:8px;white-space:pre-wrap;overflow-wrap:anywhere}
-table{width:100%;border-collapse:collapse;margin:10px 0;text-align:left}th,td{padding:8px;border-bottom:1px solid #e4ecee;vertical-align:top;overflow-wrap:anywhere}
-.scroll{overflow:auto}.muted{color:#52656b}.output{position:sticky;top:8px;z-index:2}.output:empty{display:none}.error{color:#9b2323}.one-time{border:2px solid #176957}
+{% include 'panel.css' %}
 </style>
 {% if sitekey %}<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" defer></script>{% endif %}
 </head>
-<body>
-<header><strong>LunaRelay</strong><span>{{ '管理面板' if admin else '用户服务台' }}</span></header>
-<main>
-<h1>{{ '管理面板' if admin else '用户服务台' }}</h1>
-<section class="output" id="notice" role="status"></section>
+<body class="{{ 'app-view' if user and not user.change_password else 'auth-view' }}">
+<div class="output" id="notice" role="status" aria-live="polite"></div>
+{% if not user or user.change_password %}
+<main class="auth-shell">
+<div class="auth-brand">
+<div class="brand"><span class="brand-mark" aria-hidden="true"></span><strong>LunaRelay</strong></div>
+<div class="auth-art" aria-hidden="true"><span></span><span></span><span></span><i></i></div>
+<div class="auth-brand-copy"><p>{{ '管理控制台' if admin else '用户服务台' }}</p>
+<strong>{{ '管理模型、代理和访问权限。' if admin else '管理你的 API Key 和模型用量。' }}</strong></div>
+</div>
+<div class="auth-content">
 {% if not user %}
-<div class="grid">
-<section><h2>登录</h2>
+<section class="auth-card"><h1>{{ '登录管理控制台' if admin else '登录服务台' }}</h1>
 <form action="/session/login" data-challenge="login" data-reload>
 <label>用户名<input name="username" autocomplete="username" required></label>
 <label>密码<input name="password" type="password" autocomplete="current-password" required></label>
-<div class="challenge"></div><button>登录</button>
+<div class="challenge"></div><button>登录 <span aria-hidden="true">→</span></button>
 </form></section>
 {% if signup and not admin %}
-<section><h2>发送邮箱验证码</h2>
+<details class="auth-register"><summary>使用邀请注册</summary>
+<h2>邮箱验证</h2>
 <form action="/register/send" data-challenge="send" id="send">
 <label>电子邮箱<input name="email" type="email" required></label>
 <label>六位授权码<input name="invite" pattern="[A-Za-z0-9]{6}" required></label>
 <div class="challenge"></div><button>发送验证码</button>
-</form></section>
-<section><h2>创建账号</h2>
+</form>
+<h2>创建账号</h2>
 <form action="/register/create" data-challenge="register" id="register">
 <label>用户名<input name="username" pattern="[A-Za-z0-9_]{3,32}" required></label>
 <label>显示名称<input name="display" maxlength="80" required></label>
@@ -52,45 +45,105 @@ table{width:100%;border-collapse:collapse;margin:10px 0;text-align:left}th,td{pa
 <label>邮箱验证码<input name="otp" inputmode="numeric" pattern="[0-9]{6}" required></label>
 <label>密码<input name="password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label>
 <div class="challenge"></div><button>注册</button>
-</form></section>
+</form></details>
 {% elif not admin %}
-<section><h2>开户</h2><p>请联系管理员获取账号。</p></section>
+<p class="access-note">需要账号？请联系管理员。</p>
 {% endif %}
-</div>
 {% else %}
-<p>{{ user.display }} <button class="secondary" id="logout">退出登录</button></p>
-{% if user.change_password %}
-<section><h2>修改初始密码</h2>
+<section class="auth-card"><h1>修改初始密码</h1>
 <form action="/session/password" data-reload>
 <label>当前密码<input type="password" name="old" autocomplete="current-password" required></label>
 <label>新密码<input type="password" name="password" minlength="12" maxlength="128" autocomplete="new-password" required></label>
 <button>保存密码</button>
-</form></section>
-{% elif not admin %}
-<section><h2>我的 API Key</h2>
-<form action="/account/keys" data-key><label>Key 名称<input name="label" maxlength="80" required></label><button>申请 Key</button></form>
-<div id="keys" class="scroll"></div></section>
-<section><h2>最近用量</h2><div id="usage" class="scroll"></div></section>
-<section><h2>客户端接入</h2>
-<p>将本站 Key 填入客户端的 API Key 字段。创建后请联系管理员开通模型和配额。</p>
-<ul>
-<li>Codex 使用 Responses 入口 <code>{{ request.url_root }}v1</code>。</li>
-<li>Claude Code 使用 Anthropic 基址 <code>{{ request.url_root.rstrip('/') }}</code>。</li>
-<li>Gemini CLI 使用 Gemini 基址 <code>{{ request.url_root.rstrip('/') }}</code>，通过 <code>/v1beta/models</code> 查询。</li>
-<li>Grok Build、Kimi CLI 和通用 Chat Completions 客户端可使用 <code>{{ request.url_root }}v1</code>。</li>
-</ul></section>
+</form>
+<button class="secondary" id="logout">退出登录</button></section>
+{% endif %}
+</div>
+</main>
 {% else %}
-<nav><a href="#proxy">出站代理</a><a href="#upstreams">上游</a><a href="#routing">模型路由</a><a href="#approval">Key 审批</a><a href="#signup">注册设置</a></nav>
-<section id="proxy"><h2>出站代理</h2>
+<div class="workspace">
+<aside class="sidebar">
+<div class="brand"><span class="brand-mark" aria-hidden="true"></span><strong>LunaRelay</strong></div>
+<nav aria-label="{{ '管理导航' if admin else '服务台导航' }}">
+{% if admin %}
+<a href="#overview" data-page-link><span aria-hidden="true">◈</span>总览</a>
+<a href="#proxy" data-page-link><span aria-hidden="true">◉</span>出站代理</a>
+<a href="#upstreams" data-page-link><span aria-hidden="true">↗</span>上游服务</a>
+<a href="#routing" data-page-link><span aria-hidden="true">⇄</span>模型路由</a>
+<a href="#approval" data-page-link><span aria-hidden="true">◇</span>Key 审批</a>
+<a href="#usage-page" data-page-link><span aria-hidden="true">≋</span>用量与审计</a>
+<a href="#signup" data-page-link><span aria-hidden="true">⊕</span>账户与邀请</a>
+<a href="#settings-page" data-page-link><span aria-hidden="true">⚙</span>邮件与验证</a>
+{% else %}
+<a href="#my-keys" data-page-link><span aria-hidden="true">◇</span>我的 API Key</a>
+<a href="#usage-page" data-page-link><span aria-hidden="true">≋</span>最近用量</a>
+<a href="#connect" data-page-link><span aria-hidden="true">↗</span>客户端接入</a>
+{% endif %}
+</nav>
+<div class="sidebar-account">
+<span class="avatar" aria-hidden="true">{{ (user.display or user.username)[:1] | upper }}</span>
+<div><strong>{{ user.display }}</strong><small>{{ '管理员' if admin else user.username }}</small></div>
+<button class="secondary" id="logout" aria-label="退出登录" title="退出登录">退出</button>
+</div>
+</aside>
+<main class="workspace-main">
+<header class="workbar"><span>{{ '管理控制台' if admin else '用户服务台' }}</span>
+<button type="button" class="secondary refresh-button" id="refresh-data"><span aria-hidden="true">↻</span> 刷新数据</button></header>
+{% if not admin %}
+<section class="workspace-page" data-page id="my-keys">
+<div class="page-heading"><h1>我的 API Key</h1><p>查看模型授权、到期时间和剩余额度。</p></div>
+<div class="tile-grid" aria-label="账户摘要">
+<div class="stat"><span>API Key</span><strong id="metric-keys">—</strong></div>
+<div class="stat"><span>已用请求</span><strong id="metric-requests">—</strong></div>
+<div class="stat"><span>已扣 Token</span><strong id="metric-tokens">—</strong></div>
+</div>
+<div class="card"><h2>申请 Key</h2>
+<form action="/account/keys" data-key><label>Key 名称<input name="label" maxlength="80" required></label><button>申请 Key</button></form>
+<div id="keys" class="scroll"></div></div></section>
+<section class="workspace-page" data-page id="usage-page"><div class="page-heading"><h1>最近用量</h1></div><div class="card"><div id="usage" class="scroll"></div></div></section>
+<section class="workspace-page" data-page id="connect"><div class="page-heading"><h1>客户端接入</h1></div><div class="card">
+<p>将本站 Key 填入客户端的 API Key 字段。创建后请联系管理员开通模型和配额。</p>
+<dl class="endpoints">
+<div><dt>Codex <small>Responses</small></dt><dd><code>{{ request.url_root }}v1</code></dd></div>
+<div><dt>Claude Code <small>Anthropic</small></dt><dd><code>{{ request.url_root.rstrip('/') }}</code></dd></div>
+<div><dt>Gemini CLI <small>Gemini · /v1beta/models</small></dt><dd><code>{{ request.url_root.rstrip('/') }}</code></dd></div>
+<div><dt>Grok Build、Kimi CLI <small>Chat Completions</small></dt><dd><code>{{ request.url_root }}v1</code></dd></div>
+</dl></div></section>
+{% else %}
+<section class="workspace-page" data-page id="overview">
+<div class="page-heading"><h1>运行总览</h1><p>查看网关出口、已连接上游与访问权限。</p></div>
+<div class="tile-grid" aria-label="运行摘要">
+<a class="stat" href="#proxy"><span>健康代理节点</span><strong id="metric-nodes">—</strong><small id="metric-proxy-note">等待状态</small></a>
+<a class="stat" href="#upstreams"><span>启用的上游</span><strong id="metric-upstreams">—</strong><small>查看连接</small></a>
+<a class="stat" href="#routing"><span>路由模型</span><strong id="metric-routes">—</strong><small>查看路由</small></a>
+<a class="stat" href="#approval"><span>待审批 Key</span><strong id="metric-pending">—</strong><small>查看审批</small></a>
+</div>
+<div class="card overview-status"><div><h2>出站代理</h2><dl class="status-info">
+<div><dt>当前出口</dt><dd id="overview-node">—</dd></div><div><dt>选路模式</dt><dd id="overview-mode">—</dd></div>
+<div><dt>最近更新</dt><dd id="overview-updated">—</dd></div></dl></div>
+<a class="button-link" href="#proxy">管理代理 <span aria-hidden="true">↗</span></a></div>
+<div class="overview-grid">
+<div class="card"><div class="card-heading"><h2>最近调用</h2><a href="#usage-page">查看用量 ↗</a></div>
+<div id="overview-usage" class="scroll" data-empty="还没有 API 调用"></div></div>
+<div class="card"><div class="card-heading"><h2>上游连接</h2><a href="#upstreams">查看上游 ↗</a></div>
+<div id="overview-upstreams" class="scroll" data-empty="还没有上游连接"></div></div>
+</div>
+</section>
+<section class="workspace-page" data-page id="proxy">
+<div class="page-heading"><h1>出站代理</h1><p>管理订阅、查看健康状态，或固定当前出口。</p></div>
+<div class="card"><h2>节点状态</h2><p class="inline-status" id="proxy-summary"></p><div id="node-status" class="scroll"></div>
+<form action="{{ admin_path }}/defaults" id="proxy-default-form" class="compact-form"><label>默认出口<select name="nodes" id="proxy-nodes"></select></label><button>应用出口</button></form></div>
+<div class="card"><h2>订阅方案</h2>
 <form action="{{ admin_path }}/proxy" id="proxy-form">
 <label>订阅方案<select name="profile" id="proxy-profiles"></select></label>
 <label>方案名称<input name="label" maxlength="60" placeholder="留空保留原名称"></label>
 <label>HTTPS 订阅链接<input name="url" type="password" autocomplete="off" placeholder="留空使用已有地址"></label>
 <label>下载方式<select name="via_proxy"><option value="">沿用现有配置</option><option value="proxy">通过当前代理组</option><option value="direct">HTTPS 直连</option></select></label><button>保存并启用</button>
-</form><div id="node-status" class="scroll"></div>
-<form action="{{ admin_path }}/defaults" id="proxy-default-form"><label>默认出口<select name="nodes" id="proxy-nodes"></select></label><button>应用出口</button></form>
+</form></div>
 </section>
-<section id="upstreams"><h2>上游服务</h2><div id="upstream-table" class="scroll"></div>
+<section class="workspace-page" data-page id="upstreams"><div class="page-heading"><h1>上游服务</h1><p>配置厂商连接、出站方式和上游凭据。</p></div>
+<div class="card"><h2>连接列表</h2><div id="upstream-table" class="scroll"></div></div>
+<div class="card"><h2>编辑连接</h2>
 <form action="{{ admin_path }}/upstream" id="upstream-form">
 <label>服务预设<select id="preset"><option value="">自定义</option>{% for name in providers %}<option>{{ name }}</option>{% endfor %}</select></label>
 <label>上游<select name="id" id="upstream-edit"><option value="">新增上游</option></select></label>
@@ -101,37 +154,48 @@ table{width:100%;border-collapse:collapse;margin:10px 0;text-align:left}th,td{pa
 <label>出站方式<select name="egress"><option value="proxy">代理</option><option value="direct">HTTPS 直连</option></select></label>
 <label>专用节点及顺序（逗号分隔 ID）<input name="nodes" placeholder="留空使用默认组"></label>
 <label>启用<input type="checkbox" name="enabled" checked></label><button>保存上游</button></form>
-<form action="{{ admin_path }}/disconnect" data-confirm="断开会清除本站保存的上游 API Key，并暂停这个上游。">
-<label>断开上游<select name="id" class="upstream-select" required></select></label><button class="secondary">断开并清除 API Key</button></form>
-<form action="{{ admin_path }}/discover"><label>上游<select name="id" class="upstream-select" required></select></label><button>同步模型</button></form>
-<form action="{{ admin_path }}/probe"><label>上游<select name="id" class="upstream-select" required></select></label><label>模型名称<input name="model" list="model-options" required></label><button>测试真实调用</button></form>
+</div><div class="card"><h2>同步与测试</h2>
+<form class="compact-form" action="{{ admin_path }}/discover"><label>上游<select name="id" class="upstream-select" required></select></label><button class="secondary">同步模型</button></form>
+<form class="compact-form" action="{{ admin_path }}/probe"><label>上游<select name="id" class="upstream-select" required></select></label><label>模型名称<input name="model" list="model-options" required></label><button class="secondary">测试真实调用</button></form>
+<details><summary>断开上游</summary>
+<form class="compact-form" action="{{ admin_path }}/disconnect" data-confirm="断开会清除本站保存的上游 API Key，并暂停这个上游。">
+<label>上游<select name="id" class="upstream-select" required></select></label><button class="danger">断开并清除 API Key</button></form></details>
+</div>
 </section>
-<section id="routing"><h2>模型路由</h2><div id="route-table" class="scroll"></div><div id="discovery" class="scroll"></div><datalist id="model-options"></datalist>
+<section class="workspace-page" data-page id="routing"><div class="page-heading"><h1>模型路由</h1><p>设置对外模型名、上游模型和优先级。</p></div>
+<div class="card"><h2>路由规则</h2><div id="route-table" class="scroll"></div><datalist id="model-options"></datalist>
 <form action="{{ admin_path }}/route"><label>对外模型名<input name="alias" required></label><label>上游<select name="id" class="upstream-select" required></select></label><label>上游模型<input name="model" list="model-options" required></label><label>优先级（从小到大）<input name="priority" type="number" value="0"></label><label>删除此路由<input type="checkbox" name="remove"></label><button>应用</button></form>
-</section>
-<section id="approval"><h2>API Key 审批</h2><div id="keys" class="scroll"></div>
+</div><div class="card"><h2>已同步模型</h2><div id="discovery" class="scroll"></div></div></section>
+<section class="workspace-page" data-page id="approval"><div class="page-heading"><h1>API Key 审批</h1><p>分配模型、使用额度和有效期。</p></div>
+<div class="card"><h2>访问密钥</h2><div id="keys" class="scroll"></div></div>
+<div class="card"><h2>调整授权</h2>
 <p>Token 配额按累计数量计算。请求先预留额度，完成后按厂商返回的用量结算。</p>
 <form action="{{ admin_path }}/key" id="approval-form"><label>Key<select name="id" id="key-options" required></select></label>
 <label>计量<select name="mode"><option value="requests">请求次数</option><option value="tokens">Token</option><option value="unlimited">无限量</option></select></label>
 <label>总配额<input name="quota" type="number" value="0" min="0"></label><label>有效期（留空长期有效）<input name="expires" type="datetime-local"></label>
 <label>授权模型（可多选）<select name="models" multiple id="allowed-options"></select></label>
 <label>启用<input name="enabled" type="checkbox" checked></label><button>保存审批</button></form>
-<form action="{{ admin_path }}/reveal" data-key><label>Key<select name="id" class="reveal-options" required></select></label><label>管理员当前密码<input name="password" type="password" required></label><button>查看完整 Key</button></form>
-<details><summary>查看最近用量</summary><div id="usage" class="scroll"></div></details>
-<details><summary>查看审计记录</summary><div id="audit" class="scroll"></div></details>
-</section>
-<section id="signup"><h2>开户与注册授权</h2><div id="users" class="scroll"></div>
+<details><summary>查看完整 Key</summary>
+<form class="compact-form" action="{{ admin_path }}/reveal" data-key><label>Key<select name="id" class="reveal-options" required></select></label><label>管理员当前密码<input name="password" type="password" required></label><button class="secondary">查看完整 Key</button></form></details>
+</div></section>
+<section class="workspace-page" data-page id="usage-page"><div class="page-heading"><h1>用量与审计</h1><p>核对预留、厂商报告与本站实扣用量。</p></div>
+<div class="card"><h2>最近用量</h2><div id="usage" class="scroll"></div></div>
+<div class="card"><h2>管理员审计</h2><div id="audit" class="scroll"></div></div></section>
+<section class="workspace-page" data-page id="signup"><div class="page-heading"><h1>账户与邀请</h1><p>手动添加用户或发放注册授权码。</p></div><div class="card"><h2>用户账户</h2><div id="users" class="scroll"></div>
 <form action="{{ admin_path }}/user"><label>用户名<input name="username" required></label><label>显示名称<input name="display" required></label><label>邮箱（可选）<input type="email" name="email"></label><label>临时密码<input type="password" name="password" minlength="12" required></label><button>手动开户</button></form>
-<div id="invites" class="scroll"></div>
+</div><div class="card"><h2>注册授权码</h2><div id="invites" class="scroll"></div>
 <form action="{{ admin_path }}/invite"><label>授权码 ID（新增留空）<input name="id" type="number" min="1"></label><label>剩余次数<input name="remaining" type="number" min="0" value="1" required></label><label>到期时间<input name="expires" type="datetime-local" required></label><label>备注<input name="note"></label><label>启用<input type="checkbox" name="enabled" checked></label><button>保存授权码</button></form>
-</section>
-<section><h2>邮箱与人机验证</h2><p id="settings"></p>
+</div></section>
+<section class="workspace-page" data-page id="settings-page"><div class="page-heading"><h1>邮件与验证</h1><p id="settings"></p></div>
+<div class="card"><h2>SMTP 发信</h2>
 <form action="{{ admin_path }}/smtp"><label>SMTP 主机<input name="host" required></label><label>端口<input name="port" type="number" value="587" required></label><label>登录账号<input name="username"></label><label>密码<input name="password" type="password"></label><label>发件人<input name="from" type="email" required></label><label>测试收件人<input name="recipient" type="email" required></label><button>发送测试邮件并启用</button></form>
-<form action="{{ admin_path }}/turnstile"><label>Turnstile 站点密钥<input name="sitekey"></label><label>Turnstile 服务器密钥<input name="secret" type="password"></label><button>保存人机验证</button></form>
-</section>
-{% endif %}
+</div><div class="card"><h2>Cloudflare Turnstile</h2>
+<form class="compact-form" action="{{ admin_path }}/turnstile"><label>Turnstile 站点密钥<input name="sitekey"></label><label>Turnstile 服务器密钥<input name="secret" type="password"></label><button>保存人机验证</button></form>
+</div></section>
 {% endif %}
 </main>
+</div>
+{% endif %}
 <script>
 const adminPath = {{ admin_path|tojson }};
 const presets = {{ providers|tojson }};
@@ -140,6 +204,25 @@ const csrf = document.querySelector('meta[name=csrf]').content;
 const notice = document.querySelector('#notice');
 const when = value => value ? new Date(value * 1000).toLocaleString() : '—';
 const list = value => typeof value === 'string' ? JSON.parse(value) : value;
+const format = new Intl.NumberFormat('zh-CN');
+const pages = [...document.querySelectorAll('[data-page]')];
+const pageLinks = document.querySelectorAll('[data-page-link]');
+function showPage() {
+    const requested = window.location.hash.slice(1);
+    const current = pages.find(page => page.id === requested) || pages[0];
+    if (!current) return;
+    for (const page of pages) page.hidden = page !== current;
+    for (const link of pageLinks) {
+        if (link.hash === '#' + current.id) link.setAttribute('aria-current', 'page');
+        else link.removeAttribute('aria-current');
+    }
+}
+showPage();
+window.addEventListener('hashchange', () => {
+    showPage();
+    window.scrollTo(0, 0);
+});
+
 function announce(value, failed = false) {
     notice.classList.toggle('error', failed);
     notice.classList.remove('one-time');
@@ -152,18 +235,46 @@ async function call(path, data) {
     if (!response.ok) throw new Error(body.error?.message || '操作失败');
     return body;
 }
+const normalStatuses = new Set(['可用', '启用', '已启用', '已结算']);
+const warningStatuses = new Set(['待检或不可用', '未连接', '额度不足', '已过期', '用量异常待审批', '用量超过预留', '用量待确认']);
 function table(id, headers, rows) {
     const host = document.getElementById(id);
     if (!host) return;
-    if (!rows.length) { host.textContent = '暂无记录'; return; }
+    if (!rows.length) {
+        const empty = document.createElement('p');
+        empty.className = 'empty-state';
+        empty.textContent = host.dataset.empty || '暂无记录';
+        host.removeAttribute('tabindex');
+        host.removeAttribute('aria-label');
+        host.replaceChildren(empty);
+        return;
+    }
     const table = document.createElement('table');
     const header = table.createTHead().insertRow();
-    for (const title of headers) { const cell = document.createElement('th'); cell.textContent = title; header.append(cell); }
+    for (const title of headers) {
+        const cell = document.createElement('th');
+        cell.scope = 'col';
+        cell.textContent = title;
+        header.append(cell);
+    }
     const body = table.createTBody();
     for (const row of rows) {
         const tr = body.insertRow();
-        for (const value of row) tr.insertCell().textContent = value ?? '—';
+        for (const [index, value] of row.entries()) {
+            const cell = tr.insertCell();
+            if (headers[index].endsWith('状态')) {
+                const pill = document.createElement('span');
+                const tone = normalStatuses.has(value) ? 'ok' : warningStatuses.has(value) ? 'warn' : 'neutral';
+                pill.className = 'status-pill ' + tone;
+                pill.textContent = value ?? '—';
+                cell.append(pill);
+            } else {
+                cell.textContent = value ?? '—';
+            }
+        }
     }
+    host.tabIndex = 0;
+    host.setAttribute('aria-label', headers.join('、'));
     host.replaceChildren(table);
 }
 function options(selector, values) {
@@ -176,6 +287,10 @@ let keyRecords = [];
 let upstreamRecords = [];
 const approval = document.querySelector('#approval-form');
 approval?.elements.id.addEventListener('change', () => loadApproval());
+function showMetric(id, value) {
+    const element = document.getElementById(id);
+    if (element) element.textContent = typeof value === 'number' ? format.format(value) : value;
+}
 function loadApproval() {
     const key = keyRecords.find(x => String(x.id) === approval.elements.id.value);
     if (!key) return;
@@ -193,17 +308,36 @@ async function refresh() {
     const keys = management ? data.keys : data;
     const remaining = k => k.mode === 'unlimited' ? '∞' : Math.max(0, k.quota -
         (k.mode === 'tokens' ? k.tokens + k.reserved_tokens : k.requests + k.pending_requests));
-    table('keys', ['ID','用户名','名称','前缀','计量','额度','可用','已用请求','已扣 Token','厂商报告 Token','到期时间','模型','状态'],
-        keys.map(k => [k.id,k.username,k.label,k.prefix,({requests:'请求',tokens:'Token',unlimited:'无限量'})[k.mode],
+    const keyHeaders = ['名称','前缀','计量','额度','可用','已用请求','已扣 Token','厂商报告 Token','到期时间','模型','状态'];
+    if (management) keyHeaders.unshift('ID','用户名');
+    table('keys', keyHeaders,
+        keys.map(k => [...(management ? [k.id,k.username] : []),k.label,k.prefix,({requests:'请求',tokens:'Token',unlimited:'无限量'})[k.mode],
         k.mode === 'unlimited' ? '∞' : k.quota,remaining(k),k.requests,k.tokens,k.reported_tokens,when(k.expires),list(k.models).join('、'),
         !k.enabled ? '停用' : k.token_hold ? '用量异常待审批' : k.expires && k.expires*1000 <= Date.now() ? '已过期' : k.mode !== 'unlimited' && remaining(k) === 0 ? '额度不足' : '已启用']));
     const usage = management ? data.usage : await call('/account/usage');
     const usageStatus = {pending:'处理中',complete:'已结算',estimated:'按预留结算',unknown:'用量待确认',rejected:'未扣额',overrun:'用量超过预留'};
     table('usage',['时间','Key','模型','状态','预留 Token','厂商输入','厂商输出','实扣 Token'],usage.map(u =>
         [when(u.started),u.prefix,u.model,usageStatus[u.status] || u.status,u.reserved,u.input,u.output,u.charged]));
-    if (!management) return;
+    if (!management) {
+        showMetric('metric-keys', keys.length);
+        showMetric('metric-requests', keys.reduce((total, key) => total + key.requests, 0));
+        showMetric('metric-tokens', keys.reduce((total, key) => total + key.tokens, 0));
+        return;
+    }
     keyRecords = keys;
     upstreamRecords = data.upstreams;
+    const healthy = data.nodes.filter(node => node.alive).length;
+    const routeCount = new Set(data.routes.map(route => route.alias)).size;
+    showMetric('metric-nodes', healthy + ' / ' + data.nodes.length);
+    showMetric('metric-proxy-note', data.nodes.length ? (healthy > 0 ? '节点可用' : '等待健康节点') : '未导入订阅');
+    showMetric('metric-upstreams', data.upstreams.filter(upstream => upstream.connected && upstream.enabled).length);
+    showMetric('metric-routes', routeCount);
+    showMetric('metric-pending', keys.filter(k => k.enabled && (k.token_hold || list(k.models).length === 0 || (k.mode !== 'unlimited' && k.quota === 0))).length);
+    showMetric('overview-node', data.active_node || '—');
+    showMetric('overview-mode', data.default_nodes.length ? '固定节点' : '自动选择');
+    showMetric('overview-updated', when(data.proxy_updated));
+    table('overview-usage', ['模型','实扣 Token','状态'], usage.slice(0, 4).map(u =>
+        [u.model, format.format(u.charged), usageStatus[u.status] || u.status]));
     options('#key-options,.reveal-options', keys.map(k => [k.id,k.username+' / '+k.label+' / '+k.prefix]));
     options('#allowed-options', [...new Set(data.routes.map(r => r.alias))].map(m => [m,m]));
     loadApproval();
@@ -214,15 +348,13 @@ async function refresh() {
     options('#proxy-nodes', [['','自动 · 优先健康 UDP'], ...data.nodes.map(n => [n.id,n.name + (n.alive?'':'（不可用）')])]);
     document.querySelector('#proxy-nodes').value = data.default_nodes[0] || '';
     options('#model-options', [...new Set(data.models.map(r => r.model))].map(m => [m,m]));
-    const nodeStatus = document.querySelector('#node-status');
     table('node-status',['节点 ID','名称','健康状态'],data.nodes.map(n => [n.id,n.name,n.alive?'可用':'待检或不可用']));
-    const summary = document.createElement('p');
-    const current = data.active_node;
-    summary.textContent = '健康节点 ' + data.nodes.filter(n=>n.alive).length + '/' + data.nodes.length +
-        ' · 最近刷新 ' + when(data.proxy_updated) + ' · 当前出口 ' + (current || '—');
-    nodeStatus.prepend(summary);
+    showMetric('proxy-summary', '健康节点 ' + healthy + '/' + data.nodes.length +
+        ' · 最近刷新 ' + when(data.proxy_updated) + ' · 当前出口 ' + (data.active_node || '—'));
     table('upstream-table',['ID','名称','协议','地址','出站方式','节点','状态','五小时 / 每周用量'],data.upstreams.map(u =>
         [u.id,u.name,u.protocol,u.base,u.egress==='direct'?'HTTPS 直连':'代理',list(u.nodes).join(', '),!u.connected?'未连接':u.enabled?'启用':'停用',u.quota]));
+    table('overview-upstreams',['名称','出站方式','状态'],data.upstreams.slice(0, 4).map(u =>
+        [u.name,u.egress==='direct'?'HTTPS 直连':'代理',!u.connected?'未连接':u.enabled?'启用':'停用']));
     table('route-table',['公开模型','上游 ID','上游模型','优先级'],data.routes.map(r=>[r.alias,r.upstream,r.model,r.priority]));
     table('discovery',['上游 ID','已同步模型'],data.models.map(r=>[r.upstream,r.model]));
     table('invites',['ID','授权码','剩余次数','到期时间','状态','备注'],data.invites.map(i=>
@@ -251,6 +383,18 @@ document.querySelector('#upstream-edit')?.addEventListener('change', event => {
     document.querySelector('#preset').value = '';
 });
 document.querySelector('#logout')?.addEventListener('click', async () => { await call('/session/logout', {}); location.reload(); });
+document.querySelector('#refresh-data')?.addEventListener('click', async event => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+        await refresh();
+        announce('数据已刷新');
+    } catch (error) {
+        announce(error.message, true);
+    } finally {
+        button.disabled = false;
+    }
+});
 window.addEventListener('load', () => {
     if (sitekey && window.turnstile) for (const form of document.querySelectorAll('[data-challenge]')) {
         form.widget = turnstile.render(form.querySelector('.challenge'), {sitekey, action:form.dataset.challenge});
