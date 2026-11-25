@@ -166,9 +166,16 @@ class Core:
 
     def status(self):
         with direct() as client:
-            response = client.get(self.api + '/proxies', headers={'Authorization': 'Bearer ' + self.secret}, timeout=4)
+            headers = {'Authorization': 'Bearer ' + self.secret}
+            response = client.get(self.api + '/proxies', headers=headers, timeout=4)
             response.raise_for_status()
-            return response.json().get('proxies', {})
+            proxies = response.json().get('proxies', {})
+            response = client.get(self.api + '/providers/proxies', headers=headers, timeout=4)
+            response.raise_for_status()
+            for provider in response.json().get('providers', {}).values():
+                for node in provider.get('proxies', []):
+                    proxies.setdefault(node['name'], node)
+            return proxies
 
     def client(self, port):
         client = direct()
