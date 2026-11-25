@@ -32,7 +32,7 @@ sudo bash install.sh --domain relay.example.com
 
 根据客户端使用 Bearer、`x-api-key` 或 `x-goog-api-key`。Codex 选择 Responses，Claude Code 选择 Anthropic，Gemini CLI 选择 Gemini，Grok Build 和 Kimi CLI 可通过自定义兼容提供商接入。工具调用使用客户端与上游协议一致的路由。跨协议路由支持文本和文本流。缺少上游 Token 用量时，账本按预留的保守估算量结算。
 
-管理后台和用户服务台使用独立入口。模型流量经节点代理发送，代理不可用时模型调用将失败。给应用配置允许此用途的上游 API 凭据。
+管理后台和用户服务台使用独立的 HTTPS 入口。每个上游可选代理或 HTTPS 直连。DeepSeek 和 Kimi 预设使用直连，其他预设使用代理。两种方式都校验模型厂商的 HTTPS 证书，代理故障时该上游保持代理模式。订阅可通过当前代理组下载和定时刷新。默认组优先选择健康的 UDP 节点，同组按探测延迟选择，UDP 组不可用时切换到其他健康节点；显式指定的节点列表按配置顺序切换。
 
 ## 运维
 

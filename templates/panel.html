@@ -82,7 +82,8 @@ table{width:100%;border-collapse:collapse;margin:10px 0;text-align:left}th,td{pa
 <nav><a href="#proxy">出站代理</a><a href="#upstreams">上游</a><a href="#routing">模型路由</a><a href="#approval">Key 审批</a><a href="#signup">注册设置</a></nav>
 <section id="proxy"><h2>出站代理</h2>
 <form action="{{ admin_path }}/proxy">
-<label>HTTPS 订阅链接<input name="url" type="password" autocomplete="off" placeholder="留空刷新已有订阅"></label><button>导入或刷新</button>
+<label>HTTPS 订阅链接<input name="url" type="password" autocomplete="off" placeholder="留空刷新已有订阅"></label>
+<label>下载方式<select name="via_proxy"><option value="">沿用当前设置</option><option value="proxy">通过默认代理组</option><option value="direct">HTTPS 直连</option></select></label><button>导入或刷新</button>
 </form><div id="node-status" class="scroll"></div>
 <form action="{{ admin_path }}/defaults"><label>默认节点及顺序（逗号分隔 ID）<input name="nodes" placeholder="留空使用当前全部节点"></label><button>保存默认节点组</button></form>
 </section>
@@ -94,6 +95,7 @@ table{width:100%;border-collapse:collapse;margin:10px 0;text-align:left}th,td{pa
 <label>协议<select name="protocol"><option value="chat">Chat Completions</option><option value="responses">Responses</option><option value="messages">Anthropic Messages</option><option value="gemini">Gemini</option></select></label>
 <label>HTTPS 上游地址<input type="url" name="base" required></label>
 <label>上游 API Key<input type="password" name="secret" autocomplete="off" placeholder="编辑时留空保留原值"></label>
+<label>出站方式<select name="egress"><option value="proxy">代理</option><option value="direct">HTTPS 直连</option></select></label>
 <label>专用节点及顺序（逗号分隔 ID）<input name="nodes" placeholder="留空使用默认组"></label>
 <label>启用<input type="checkbox" name="enabled" checked></label><button>保存上游</button></form>
 <form action="{{ admin_path }}/discover"><label>上游<select name="id" class="upstream-select" required></select></label><button>同步模型</button></form>
@@ -198,8 +200,8 @@ async function refresh() {
     summary.textContent = '最近刷新 ' + when(data.proxy_updated) + ' · 当前出口 ' +
       (Object.entries(data.exits).map(([n,v])=>n+': '+(v || '—')).join(' / ') || '—');
     nodeStatus.prepend(summary);
-    table('upstream-table',['ID','名称','协议','地址','节点','状态','五小时 / 每周用量'],data.upstreams.map(u =>
-        [u.id,u.name,u.protocol,u.base,list(u.nodes).join(', '),u.enabled?'启用':'停用',u.quota]));
+    table('upstream-table',['ID','名称','协议','地址','出站方式','节点','状态','五小时 / 每周用量'],data.upstreams.map(u =>
+        [u.id,u.name,u.protocol,u.base,u.egress==='direct'?'HTTPS 直连':'代理',list(u.nodes).join(', '),u.enabled?'启用':'停用',u.quota]));
     table('route-table',['公开模型','上游 ID','上游模型','优先级'],data.routes.map(r=>[r.alias,r.upstream,r.model,r.priority]));
     table('discovery',['上游 ID','已同步模型'],data.models.map(r=>[r.upstream,r.model]));
     table('invites',['ID','授权码','剩余次数','到期时间','状态','备注'],data.invites.map(i=>
@@ -214,6 +216,7 @@ document.querySelector('#preset')?.addEventListener('change', e => {
     if (presets[e.target.value]) {
         form.elements.name.value = e.target.value;
         [form.elements.protocol.value,form.elements.base.value] = presets[e.target.value];
+        form.elements.egress.value = ['DeepSeek','Kimi'].includes(e.target.value) ? 'direct' : 'proxy';
     }
 });
 document.querySelector('#logout')?.addEventListener('click', async () => { await call('/session/logout', {}); location.reload(); });
@@ -231,6 +234,7 @@ for (const form of document.querySelectorAll('form')) form.addEventListener('sub
         for (const input of form.querySelectorAll('input[type=checkbox]')) data[input.name] = input.checked;
         for (const select of form.querySelectorAll('select[multiple]')) data[select.name] = [...select.selectedOptions].map(o=>o.value);
         if ('expires' in data) data.expires = data.expires ? Math.floor(new Date(data.expires).getTime()/1000) : 0;
+        if ('via_proxy' in data) data.via_proxy = data.via_proxy ? data.via_proxy === 'proxy' : null;
         if (sitekey && form.dataset.challenge) data.turnstile = form.widget != null ? turnstile.getResponse(form.widget) : '';
         const result = await call(form.getAttribute('action'), data);
         for (const secret of form.querySelectorAll('input[type=password]')) secret.value = '';

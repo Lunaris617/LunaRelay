@@ -52,7 +52,7 @@ PROVIDERS = {
     'Google Gemini': ('gemini', 'https://generativelanguage.googleapis.com'),
     'DeepSeek': ('chat', 'https://api.deepseek.com'),
     'xAI/Grok': ('chat', 'https://api.x.ai'),
-    'Kimi': ('chat', 'https://api.moonshot.ai'),
+    'Kimi': ('chat', 'https://api.moonshot.cn'),
 }
 
 
@@ -123,8 +123,11 @@ with database() as db:
             (STATE / 'bootstrap-password').chmod(0o600)
         db.execute("INSERT INTO users(username,display,password,admin,change_password) VALUES('root','管理员',?,1,1)",
                    (PASSWORDS.hash(initial),))
-    # Calls interrupted by a process restart may have reached the provider.
-    db.execute("UPDATE ledger SET status='unknown',requests=1,input=reserved WHERE status='pending'")
+    if 'egress' not in {row[1] for row in db.execute('PRAGMA table_info(upstreams)')}:
+        db.execute("ALTER TABLE upstreams ADD COLUMN egress TEXT NOT NULL DEFAULT 'proxy'")
+    if not os.getenv('RELAY_MAINTENANCE'):
+        # Calls interrupted by a process restart may have reached the provider.
+        db.execute("UPDATE ledger SET status='unknown',requests=1,input=reserved WHERE status='pending'")
 
 
 class Problem(Exception):
@@ -420,23 +423,28 @@ def my_keys():
 CONFIG_LOCK = threading.Lock()
 
 
-def refresh_proxy(url=None):
+def refresh_proxy(url=None, *, transport=None, via_proxy=None):
     with CONFIG_LOCK:
         url = url or settings('subscription', '')
         if not url:
             raise Problem('请先添加代理订阅', 503)
         try:
-            candidates = egress.subscription(egress.download(url))
+            if via_proxy is None:
+                via_proxy = settings('subscription_via_proxy', False)
+            if transport is None and via_proxy:
+                transport = CORE.client(19000)
+            candidates = egress.subscription(egress.download(url, transport))
             revision = settings('proxy_revision', 0)
             with database() as db:
                 exits = {'19000': settings('default_nodes', [])}
                 exits.update({str(19000 + row['id']): json.loads(row['nodes'])
-                             for row in db.execute('SELECT id,nodes FROM upstreams') if json.loads(row['nodes'])})
+                             for row in db.execute("SELECT id,nodes FROM upstreams WHERE egress='proxy'") if json.loads(row['nodes'])})
             nodes = CORE.configure(candidates, exits)
         except (NETWORK_ERRORS, UnicodeError):
             raise Problem('代理订阅或 Mihomo 连接失败', 503) from None
         with database(True) as db:
             setting(db, 'subscription', url)
+            setting(db, 'subscription_via_proxy', via_proxy)
             setting(db, 'proxy_updated', now())
             setting(db, 'proxy_nodes', nodes)
             setting(db, 'proxy_active_revision', revision)
@@ -454,7 +462,7 @@ def periodic():
                 time.sleep(900)
 
 
-if os.getenv('MIHOMO_STATE'):
+if os.getenv('MIHOMO_STATE') and not os.getenv('RELAY_MAINTENANCE'):
     threading.Thread(target=periodic, daemon=True).start()
 
 
@@ -466,7 +474,9 @@ def names(value):
 
 def upstream_call(upstream, method, path, data=None, stream=False):
     port = 19000 + upstream['id'] if json.loads(upstream['nodes']) else 19000
-    client = CORE.client(port)
+    direct_route = upstream['egress'] == 'direct'
+    egress.public_https(upstream['base'], resolve=direct_route)
+    client = egress.direct() if direct_route else CORE.client(port)
     try:
         response = client.request(method, upstream['base'] + path, json=data, stream=stream,
                                   headers=protocols.headers(upstream['protocol'], decrypt(upstream['secret'])),
@@ -516,7 +526,7 @@ def admin_data():
             'invites': [dict(r) | {'code': decrypt(r['code'])} for r in db.execute(
                 'SELECT id,code,remaining,expires,enabled,note FROM invites ORDER BY id DESC')],
             'upstreams': [dict(r) | {'quota': '上游未提供'} for r in db.execute(
-                'SELECT id,name,protocol,base,nodes,enabled FROM upstreams')],
+                'SELECT id,name,protocol,base,nodes,enabled,egress FROM upstreams')],
             'routes': [dict(r) for r in db.execute('SELECT * FROM routes ORDER BY alias,priority')],
             'models': [dict(r) for r in db.execute('SELECT * FROM discovered ORDER BY upstream,model')],
             'audit': [dict(r) for r in db.execute('SELECT action,target,created FROM audit ORDER BY id DESC LIMIT 30')],
@@ -541,7 +551,7 @@ def admin_update(action):
     data = payload()
     record = int(data.get('id') or 0)
     if action == 'proxy':
-        nodes = refresh_proxy(str(data.get('url', '')).strip() or None)
+        nodes = refresh_proxy(str(data.get('url', '')).strip() or None, via_proxy=data.get('via_proxy'))
         return jsonify(nodes=nodes)
     if action == 'smtp':
         config = {'host': data['host'], 'port': int(data['port']), 'from': data['from'],
@@ -623,24 +633,27 @@ def admin_update(action):
         elif action == 'upstream':
             name = str(data.get('name', '')).strip()
             protocol, base = data.get('protocol'), str(data.get('base', '')).strip().rstrip('/')
-            selected = names(data.get('nodes'))
+            outbound = data.get('egress', 'proxy')
+            if outbound not in ('proxy', 'direct'):
+                raise Problem('请选择代理或 HTTPS 直连')
+            selected = names(data.get('nodes')) if outbound == 'proxy' else []
             if protocol not in ('chat', 'responses', 'messages', 'gemini') or not name or not base:
                 raise Problem('请填写完整的上游名称、协议和地址')
-            parsed = egress.public_https(base)
+            parsed = egress.public_https(base, resolve=outbound == 'direct')
             if parsed.query:
                 raise Problem('上游地址不能含查询参数')
             if not set(selected) <= set(settings('proxy_nodes', [])):
                 raise Problem('节点不存在')
             cred = str(data.get('secret', '')).strip()
             if record:
-                db.execute('UPDATE upstreams SET name=?,protocol=?,base=?,secret=COALESCE(?,secret),nodes=?,enabled=? WHERE id=?',
+                db.execute('UPDATE upstreams SET name=?,protocol=?,base=?,secret=COALESCE(?,secret),nodes=?,enabled=?,egress=? WHERE id=?',
                            (name, protocol, base, encrypt(cred) if cred else None, json.dumps(selected),
-                            int(bool(data.get('enabled', True))), record))
+                            int(bool(data.get('enabled', True))), outbound, record))
             else:
                 if not cred or db.execute('SELECT COUNT(*) FROM upstreams').fetchone()[0] >= 128:
                     raise Problem('缺少 API 凭据或已达到上游数量上限')
-                db.execute('INSERT INTO upstreams(name,protocol,base,secret,nodes) VALUES(?,?,?,?,?)',
-                           (name, protocol, base, encrypt(cred), json.dumps(selected)))
+                db.execute('INSERT INTO upstreams(name,protocol,base,secret,nodes,egress) VALUES(?,?,?,?,?,?)',
+                           (name, protocol, base, encrypt(cred), json.dumps(selected), outbound))
             if settings('subscription'):
                 setting(db, 'proxy_revision', settings('proxy_revision', 0) + 1)
         elif action == 'route':
@@ -763,6 +776,8 @@ def infer(gemini=None):
     estimate = len(request.get_data()) + int(max_output or 1024)
     request_id = 'lr_' + secrets.token_hex(12)
     if not settings('proxy_updated'):
+        candidates = [(upstream, body) for upstream, body in candidates if upstream['egress'] == 'direct']
+    if not candidates:
         raise Problem('请等待管理员配置或刷新上游代理', 503)
     reserve(key['id'], alias, request_id, estimate)
     for upstream, body in candidates:

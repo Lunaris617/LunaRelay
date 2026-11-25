@@ -53,7 +53,7 @@ class RelayTest(unittest.TestCase):
         self.assertEqual(user.get('/v1/models', headers=headers).json['data'], [])
         self.assertEqual(user.post('/v1/responses', headers=headers, json={'model':'example','input':'Hello'}).status_code, 403)
         with relay.database(True) as db:
-            db.execute("INSERT INTO upstreams VALUES(1,'mock','responses','https://example.com',?,'[]',1)",
+            db.execute("INSERT INTO upstreams VALUES(1,'mock','responses','https://example.com',?,'[]',1,'proxy')",
                        (relay.encrypt('placeholder'),))
             db.execute("INSERT INTO routes VALUES('example',1,'mock-model',0)")
             relay.setting(db, 'proxy_updated', relay.now())
