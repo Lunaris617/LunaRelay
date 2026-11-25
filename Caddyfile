@@ -1,0 +1,30 @@
+{
+    admin off
+}
+
+(tls_settings) {
+    tls {
+        issuer {$TLS_ISSUER} {
+            {$TLS_OPTIONS}
+        }
+    }
+}
+
+{$PUBLIC_HOST} {
+    import tls_settings
+    reverse_proxy relay:8080 {
+        header_up -X-Lunarelay-Entry
+        flush_interval -1
+    }
+}
+
+https://{$PUBLIC_HOST}:{$ADMIN_PORT} {
+    import tls_settings
+    @admin path /{$ADMIN_PATH} /{$ADMIN_PATH}/* /session/*
+    handle @admin {
+        reverse_proxy relay:8080 {
+            header_up X-Lunarelay-Entry admin
+        }
+    }
+    respond 404
+}

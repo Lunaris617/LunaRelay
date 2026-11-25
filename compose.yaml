@@ -1,0 +1,32 @@
+services:
+  relay:
+    build: .
+    restart: unless-stopped
+    environment:
+      ADMIN_PATH: ${ADMIN_PATH:?run install.sh}
+      ADMIN_PORT: ${ADMIN_PORT:?run install.sh}
+      MIHOMO_STATE: /mihomo
+      MIHOMO_SECRET: ${MIHOMO_SECRET:?run install.sh}
+    volumes: ["./state/relay:/state", "./state/mihomo:/mihomo"]
+    networks: [web, proxy]
+  mihomo:
+    image: ${MIHOMO_IMAGE:-metacubex/mihomo:v1.19.34}
+    command: ["-d", "/mihomo", "-f", "/mihomo/config.yaml"]
+    restart: unless-stopped
+    volumes: ["./state/mihomo:/mihomo"]
+    networks: [proxy]
+  caddy:
+    image: ${CADDY_IMAGE:-caddy:2.10.2-alpine}
+    restart: unless-stopped
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:?run install.sh}
+      ADMIN_PORT: ${ADMIN_PORT:?run install.sh}
+      ADMIN_PATH: ${ADMIN_PATH:?run install.sh}
+      TLS_ISSUER: ${TLS_ISSUER:?run install.sh}
+      TLS_OPTIONS: ${TLS_OPTIONS:-}
+    ports: ["80:80", "443:443", "${ADMIN_PORT}:${ADMIN_PORT}"]
+    volumes: ["./Caddyfile:/etc/caddy/Caddyfile:ro", "./state/caddy-data:/data", "./state/caddy-config:/config"]
+    networks: [web]
+networks:
+  web:
+  proxy:
