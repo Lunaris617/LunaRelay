@@ -12,6 +12,8 @@ sudo bash install.sh --domain relay.example.com
 
 如需指定管理端口，追加 `--admin-port 25443`。无域名时使用 `--ip 203.0.113.10`，并在客户端信任安装器给出的 Caddy CA。域名安装需将公网 80、443 和管理端口转发至部署服务器。配置保存在 `.env`，数据、证书和备份保存在 `state/`。首次登录使用面板用户 `root`，初始密码由安装器生成并以仅限服务器管理员读取的方式存放在 `state/relay/bootstrap-password`。
 
+网络受限的服务器可以先用 `docker load` 导入 Compose 和 Dockerfile 所用的官方基础镜像，再将适用于目标 Linux 架构及 CPython 3.13 的二进制 Python 依赖包放进 `wheelhouse/`。Docker 构建会从该目录离线安装。
+
 1. 登录管理面板并更换初始密码。
 2. 在「出站代理」中导入 HTTPS 节点订阅。支持 Clash `proxies` YAML、逐行节点 URI 和常见 v2rayN/Xray Base64 节点订阅。
 3. 新建上游，选择适合该服务的协议和代理节点。上游地址填写 API 根地址，省略由网关添加的版本路径，例如 `https://api.openai.com`。同步模型或手工填写模型 ID，再创建公开模型别名并测试调用。
