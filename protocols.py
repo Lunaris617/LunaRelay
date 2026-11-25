@@ -110,9 +110,65 @@ def convert(source, target, data, model, stream):
 def usage(data):
     obj = data.get('response') or data.get('message') or data
     counts = obj.get('usage') or obj.get('usageMetadata') or {}
-    prompt = counts.get('input_tokens', counts.get('prompt_tokens', counts.get('promptTokenCount', 0)))
-    answer = counts.get('output_tokens', counts.get('completion_tokens', counts.get('candidatesTokenCount', 0)))
-    return int(prompt or 0), int(answer or 0)
+    if not isinstance(counts, dict):
+        return 0, 0
+    def count(key):
+        value = counts.get(key)
+        return min(max(value, 0), 10**9) if type(value) is int else 0
+    prompt = max(count('input_tokens'), count('prompt_tokens'), count('promptTokenCount'))
+    if 'input_tokens' in counts or 'cache_read_input_tokens' in counts or 'cache_creation_input_tokens' in counts:
+        prompt += count('cache_read_input_tokens') + count('cache_creation_input_tokens')
+    answer = max(count('output_tokens'), count('completion_tokens'),
+                 count('candidatesTokenCount') + count('thoughtsTokenCount'))
+    return prompt, max(answer, count('total_tokens') - prompt, count('totalTokenCount') - prompt)
+
+
+def output_limit(protocol, data):
+    if protocol == 'gemini':
+        config = data.get('generationConfig', {})
+        if not isinstance(config, dict):
+            raise ValueError('generationConfig 必须是对象')
+        return config.get('maxOutputTokens')
+    if protocol == 'chat' and 'max_completion_tokens' in data:
+        return data['max_completion_tokens']
+    return data.get('max_output_tokens' if protocol == 'responses' else 'max_tokens')
+
+
+def cap_output(protocol, data, limit):
+    if protocol == 'gemini':
+        data.setdefault('generationConfig', {})['maxOutputTokens'] = limit
+    elif protocol == 'chat':
+        field = 'max_completion_tokens' if 'max_completion_tokens' in data else 'max_tokens'
+        data.pop('max_completion_tokens' if field == 'max_tokens' else 'max_tokens', None)
+        data[field] = limit
+    else:
+        data['max_output_tokens' if protocol == 'responses' else 'max_tokens'] = limit
+
+
+def require_bounded_text(data, protocol):
+    config = data.get('generationConfig') or {}
+    if data.get('n', 1) != 1 or config.get('candidateCount', 1) != 1:
+        raise ValueError('Token 配额只支持每次生成一个候选结果')
+    if any(data.get(field) for field in ('previous_response_id', 'conversation', 'background', 'audio', 'cachedContent')):
+        raise ValueError('Token 配额需要在当前请求内提供完整文本上下文')
+    tools = data.get('tools') or []
+    if not isinstance(tools, list) or any(not isinstance(tool, dict) for tool in tools):
+        raise ValueError('tools 必须是对象数组')
+    if any((set(tool) != {'functionDeclarations'} if protocol == 'gemini'
+            else tool.get('type', 'function') != 'function') for tool in tools):
+        raise ValueError('Token 配额仅支持客户端函数工具')
+    stack = [data]
+    blocked_types = {'input_image', 'image_url', 'image', 'document', 'input_file', 'file', 'audio', 'input_audio'}
+    while stack:
+        item = stack.pop()
+        if isinstance(item, list):
+            stack.extend(item)
+        elif isinstance(item, dict):
+            kind = item.get('type')
+            has_media = bool({'inlineData', 'inline_data', 'fileData', 'file_data'} & item.keys())
+            if has_media or (isinstance(kind, str) and kind in blocked_types):
+                raise ValueError('Token 配额目前支持文本与函数工具，不接受媒体或文件输入')
+            stack.extend(item.values())
 
 
 def output_text(protocol, obj):

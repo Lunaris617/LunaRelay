@@ -133,9 +133,16 @@ with database() as db:
                 pass
     if 'egress' not in {row[1] for row in db.execute('PRAGMA table_info(upstreams)')}:
         db.execute("ALTER TABLE upstreams ADD COLUMN egress TEXT NOT NULL DEFAULT 'proxy'")
+    if 'token_hold' not in {row[1] for row in db.execute('PRAGMA table_info(keys)')}:
+        db.execute('ALTER TABLE keys ADD COLUMN token_hold INTEGER NOT NULL DEFAULT 0')
+    ledger_columns = {row[1] for row in db.execute('PRAGMA table_info(ledger)')}
+    if 'tokens_charged' not in ledger_columns:
+        db.execute('ALTER TABLE ledger ADD COLUMN tokens_charged INTEGER')
+    if 'metering' not in ledger_columns:
+        db.execute("ALTER TABLE ledger ADD COLUMN metering TEXT NOT NULL DEFAULT 'legacy'")
     if not os.getenv('RELAY_MAINTENANCE'):
         # Calls interrupted by a process restart may have reached the provider.
-        db.execute("UPDATE ledger SET status='unknown',requests=1,input=reserved WHERE status='pending'")
+        db.execute("UPDATE ledger SET status='unknown',requests=1,tokens_charged=reserved WHERE status='pending'")
 
 
 class Problem(Exception):
@@ -402,11 +409,32 @@ def check_invite(db, lookup):
 
 def key_rows(db, owner=None):
     query = """SELECT keys.id,keys.owner,users.username,label,prefix,mode,quota,expires,models,enabled,created,
-               COALESCE(SUM(input+output),0) AS tokens,COALESCE(SUM(requests),0) AS requests
+               token_hold,COALESCE(SUM(COALESCE(tokens_charged,input+output)),0) AS tokens,
+               COALESCE(SUM(input+output),0) AS reported_tokens,
+               COALESCE(SUM(CASE WHEN status='pending' THEN reserved ELSE 0 END),0) AS reserved_tokens,
+               COALESCE(SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END),0) AS pending_requests,
+               COALESCE(SUM(requests),0) AS requests
                FROM keys JOIN users ON keys.owner=users.id LEFT JOIN ledger ON ledger.key_id=keys.id"""
     if owner is not None:
         query += ' WHERE owner=?'
     return [dict(row) for row in db.execute(query + ' GROUP BY keys.id ORDER BY keys.id DESC', (owner,) if owner else ())]
+
+
+def recent_usage(db, owner=None):
+    query = """SELECT keys.prefix,ledger.model,ledger.started,ledger.status,ledger.reserved,
+               ledger.input,ledger.output,COALESCE(ledger.tokens_charged,ledger.input+ledger.output) AS charged
+               FROM ledger JOIN keys ON keys.id=ledger.key_id"""
+    if owner is not None:
+        query += ' WHERE keys.owner=?'
+    return [dict(row) for row in db.execute(query + ' ORDER BY ledger.started DESC,ledger.rowid DESC LIMIT 30',
+                                           (owner,) if owner is not None else ())]
+
+
+@app.get('/account/usage')
+def my_usage():
+    user = member()
+    with database() as db:
+        return jsonify(recent_usage(db, user['id']))
 
 
 @app.route('/account/keys', methods=['GET', 'POST'])
@@ -431,32 +459,85 @@ def my_keys():
 CONFIG_LOCK = threading.Lock()
 
 
-def refresh_proxy(url=None, *, transport=None, via_proxy=None):
+def proxy_profiles():
+    profiles = settings('proxy_profiles', {})
+    active = settings('active_proxy_profile', '')
+    if not profiles and settings('subscription'):
+        active = 'default'
+        profiles[active] = {'name': '默认订阅', 'url': settings('subscription'),
+                            'via_proxy': settings('subscription_via_proxy', False),
+                            'nodes': settings('default_nodes', [])}
+    return profiles, active
+
+
+def configured_exits(default_nodes):
+    with database() as db:
+        result = {'19000': default_nodes}
+        result.update({str(19000 + row['id']): json.loads(row['nodes']) for row in db.execute(
+            "SELECT id,nodes FROM upstreams WHERE egress='proxy'") if json.loads(row['nodes'])})
+    return result
+
+
+def refresh_proxy(url=None, *, transport=None, via_proxy=None, profile_id=None, label=None):
     with CONFIG_LOCK:
-        url = url or settings('subscription', '')
+        profiles, active = proxy_profiles()
+        selected = profile_id or active or 'default'
+        if selected == 'new':
+            if len(profiles) >= 12:
+                raise Problem('订阅方案数量已达上限')
+            selected = secrets.token_hex(8)
+        elif profile_id and profile_id not in profiles:
+            raise Problem('订阅方案不存在', 404)
+        current = profiles.get(selected, {})
+        if label is not None and (len(label) > 60 or not label and not current):
+            raise Problem('请填写 1–60 个字符的订阅名称')
+        url = url or current.get('url', '')
         if not url:
             raise Problem('请先添加代理订阅', 503)
         try:
             if via_proxy is None:
-                via_proxy = settings('subscription_via_proxy', False)
+                via_proxy = current.get('via_proxy', settings('subscription_via_proxy', False))
             if transport is None and via_proxy:
                 transport = CORE.client(19000)
             candidates = egress.subscription(egress.download(url, transport))
             revision = settings('proxy_revision', 0)
-            with database() as db:
-                exits = {'19000': settings('default_nodes', [])}
-                exits.update({str(19000 + row['id']): json.loads(row['nodes'])
-                             for row in db.execute("SELECT id,nodes FROM upstreams WHERE egress='proxy'") if json.loads(row['nodes'])})
-            nodes = CORE.configure(candidates, exits)
+            pinned = current.get('nodes', [])
+            nodes = CORE.configure(candidates, configured_exits(pinned))
         except (NETWORK_ERRORS, UnicodeError):
             raise Problem('代理订阅或 Mihomo 连接失败', 503) from None
+        profiles[selected] = {'name': label or current.get('name', '默认订阅'), 'url': url,
+                              'via_proxy': via_proxy, 'nodes': pinned}
         with database(True) as db:
             setting(db, 'subscription', url)
             setting(db, 'subscription_via_proxy', via_proxy)
+            setting(db, 'proxy_profiles', profiles)
+            setting(db, 'active_proxy_profile', selected)
+            setting(db, 'default_nodes', pinned)
             setting(db, 'proxy_updated', now())
             setting(db, 'proxy_nodes', nodes)
             setting(db, 'proxy_active_revision', revision)
         return nodes
+
+
+def reconfigure_proxy(default_nodes=None):
+    with CONFIG_LOCK:
+        profiles, active = proxy_profiles()
+        if not active:
+            raise Problem('请先导入订阅')
+        selected = profiles[active]['nodes'] if default_nodes is None else default_nodes
+        if not set(selected) <= set(settings('proxy_nodes', [])):
+            raise Problem('节点不在当前订阅中')
+        try:
+            nodes = CORE.configure(CORE.cached_nodes(), configured_exits(selected))
+        except (NETWORK_ERRORS, UnicodeError, ValueError):
+            raise Problem('无法应用当前节点设置，请检查订阅', 503) from None
+        profiles[active]['nodes'] = selected
+        with database(True) as db:
+            setting(db, 'proxy_profiles', profiles)
+            setting(db, 'active_proxy_profile', active)
+            setting(db, 'default_nodes', selected)
+            setting(db, 'proxy_nodes', nodes)
+            setting(db, 'proxy_active_revision', settings('proxy_revision', 0))
 
 
 def periodic():
@@ -531,10 +612,11 @@ def admin_data():
         result = {
             'users': [dict(r) for r in db.execute('SELECT id,username,display,email FROM users WHERE admin=0')],
             'keys': key_rows(db),
+            'usage': recent_usage(db),
             'invites': [dict(r) | {'code': decrypt(r['code'])} for r in db.execute(
                 'SELECT id,code,remaining,expires,enabled,note FROM invites ORDER BY id DESC')],
             'upstreams': [dict(r) | {'quota': '上游未提供'} for r in db.execute(
-                'SELECT id,name,protocol,base,nodes,enabled,egress FROM upstreams')],
+                "SELECT id,name,protocol,base,nodes,enabled,egress,secret<>'' AS connected FROM upstreams")],
             'routes': [dict(r) for r in db.execute('SELECT * FROM routes ORDER BY alias,priority')],
             'models': [dict(r) for r in db.execute('SELECT * FROM discovered ORDER BY upstream,model')],
             'audit': [dict(r) for r in db.execute('SELECT action,target,created FROM audit ORDER BY id DESC LIMIT 30')],
@@ -544,7 +626,16 @@ def admin_data():
         core_status = CORE.status()
     except (NETWORK_ERRORS, ValueError):
         pass
-    result.update(proxy_updated=settings('proxy_updated'), default_nodes=settings('default_nodes', []),
+    current = 'exit-19000'
+    visited = {current}
+    while (next_node := core_status.get(current, {}).get('now')) and next_node not in visited:
+        current = next_node
+        visited.add(current)
+    active_node = current.split(' ', 1)[-1] if current.startswith('node-') else current if len(visited) > 1 else ''
+    profiles, active = proxy_profiles()
+    result.update(proxy_updated=settings('proxy_updated'), default_nodes=settings('default_nodes', []), active_profile=active,
+                  active_node=active_node,
+                  profiles=[{'id': key, 'name': p['name'], 'via_proxy': p['via_proxy']} for key, p in profiles.items()],
                   smtp_ready=bool(settings('smtp', {}).get('verified')), turnstile_ready=bool(settings('turnstile', {})),
                   nodes=[{'id': n, 'name': next((k.split(' ', 1)[1] for k in core_status if k.startswith(n + ' ')), n),
                           'alive': any(v.get('alive', False) for k, v in core_status.items() if k.startswith(n + ' '))}
@@ -559,8 +650,14 @@ def admin_update(action):
     data = payload()
     record = int(data.get('id') or 0)
     if action == 'proxy':
-        nodes = refresh_proxy(str(data.get('url', '')).strip() or None, via_proxy=data.get('via_proxy'))
+        nodes = refresh_proxy(str(data.get('url', '')).strip() or None, via_proxy=data.get('via_proxy'),
+                              profile_id=data.get('profile') or None, label=str(data.get('label', '')).strip())
         return jsonify(nodes=nodes)
+    if action == 'defaults':
+        reconfigure_proxy(names(data.get('nodes')))
+        with database(True) as db:
+            audit(db, action, 'configuration')
+        return jsonify(ok=True)
     if action == 'smtp':
         config = {'host': data['host'], 'port': int(data['port']), 'from': data['from'],
                   'username': data.get('username', ''), 'password': data.get('password', ''), 'verified': True}
@@ -615,7 +712,14 @@ def admin_update(action):
                 raise Problem('额度配置无效')
             if set(selected) - {r[0] for r in db.execute('SELECT alias FROM routes')}:
                 raise Problem('存在尚未配置路由的模型')
-            db.execute('UPDATE keys SET mode=?,quota=?,expires=?,models=?,enabled=? WHERE id=?',
+            previous = db.execute('SELECT mode FROM keys WHERE id=?', (record,)).fetchone()
+            if not previous:
+                raise Problem('Key 不存在', 404)
+            if previous['mode'] != mode and db.execute(
+                "SELECT 1 FROM ledger WHERE key_id=? AND status='pending' LIMIT 1", (record,)
+            ).fetchone():
+                raise Problem('该 Key 有正在进行的请求，请在请求结束后切换计量方式', 409)
+            db.execute('UPDATE keys SET mode=?,quota=?,expires=?,models=?,enabled=?,token_hold=0 WHERE id=?',
                        (mode, quantity, int(data.get('expires') or 0), json.dumps(selected), int(bool(data.get('enabled', True))), record))
         elif action == 'reveal':
             rate_limit = db.execute('SELECT COUNT(*) FROM audit WHERE actor=? AND action=? AND created>?',
@@ -632,12 +736,9 @@ def admin_update(action):
             if bool(sitekey) != bool(secret):
                 raise Problem('请同时填写站点密钥和服务器密钥')
             setting(db, 'turnstile', {'sitekey': sitekey, 'secret': secret} if sitekey else {})
-        elif action == 'defaults':
-            selected = names(data.get('nodes'))
-            if not set(selected) <= set(settings('proxy_nodes', [])):
-                raise Problem('节点不存在')
-            setting(db, 'default_nodes', selected)
-            setting(db, 'proxy_revision', settings('proxy_revision', 0) + 1)
+        elif action == 'disconnect':
+            db.execute("UPDATE upstreams SET secret='',enabled=0 WHERE id=?", (record,))
+            db.execute('DELETE FROM discovered WHERE upstream=?', (record,))
         elif action == 'upstream':
             name = str(data.get('name', '')).strip()
             protocol, base = data.get('protocol'), str(data.get('base', '')).strip().rstrip('/')
@@ -654,6 +755,11 @@ def admin_update(action):
                 raise Problem('节点不存在')
             cred = str(data.get('secret', '')).strip()
             if record:
+                previous = db.execute('SELECT secret FROM upstreams WHERE id=?', (record,)).fetchone()
+                if not previous:
+                    raise Problem('上游服务不存在', 404)
+                if not previous['secret'] and not cred:
+                    raise Problem('重新连接请填写新的 API Key')
                 db.execute('UPDATE upstreams SET name=?,protocol=?,base=?,secret=COALESCE(?,secret),nodes=?,enabled=?,egress=? WHERE id=?',
                            (name, protocol, base, encrypt(cred) if cred else None, json.dumps(selected),
                             int(bool(data.get('enabled', True))), outbound, record))
@@ -675,9 +781,9 @@ def admin_update(action):
         else:
             abort(404)
         audit(db, action, record or 'new')
-    if action in ('upstream', 'defaults') and settings('subscription'):
+    if action == 'upstream' and settings('subscription'):
         try:
-            refresh_proxy()
+            reconfigure_proxy()
         except (Problem, ValueError):
             return jsonify(ok=True, warning='已保存，代理出口待刷新')
     return jsonify(ok=True)
@@ -711,31 +817,49 @@ def models():
                                        'type': 'model', 'display_name': model} for model in selected], has_more=False)
 
 
-def reserve(key_id, alias, request_id, estimate):
+def reserve(key_id, alias, request_id, estimate, *, mode=None, min_estimate=None):
     with database(True) as db:
         key = db.execute('SELECT * FROM keys WHERE id=? AND enabled=1', (key_id,)).fetchone()
         if not key or alias not in json.loads(key['models']):
             raise Problem('此 Key 未获准调用该模型', 403)
         if key['expires'] and key['expires'] <= now():
             raise Problem('此 Key 的使用期限已到', 403)
+        if mode is not None and key['mode'] != mode:
+            raise Problem('Key 的计量方式刚刚更新，请重试', 409)
+        if key['token_hold']:
+            raise Problem('厂商用量与预留不一致，管理员重新审批后可恢复', 429)
         if key['mode'] != 'unlimited':
             is_tokens = key['mode'] == 'tokens'
             used = db.execute(
-                'SELECT COALESCE(SUM(CASE WHEN status=? THEN reserved ELSE input+output END),0) FROM ledger WHERE key_id=?'
+                'SELECT COALESCE(SUM(CASE WHEN status=? THEN reserved ELSE COALESCE(tokens_charged,input+output) END),0) FROM ledger WHERE key_id=?'
                 if is_tokens else
                 'SELECT COALESCE(SUM(CASE WHEN status=? THEN 1 ELSE requests END),0) FROM ledger WHERE key_id=?',
                 ('pending', key_id),
             ).fetchone()[0]
-            if used + (estimate if is_tokens else 1) > key['quota']:
+            if is_tokens and min_estimate is not None:
+                estimate = min(estimate, max(0, key['quota'] - used))
+            if (is_tokens and min_estimate is not None and estimate < min_estimate) or used + (estimate if is_tokens else 1) > key['quota']:
                 raise Problem('此 Key 的可用额度不足', 429)
-        db.execute('INSERT INTO ledger(id,key_id,model,started,status,reserved) VALUES(?,?,?,?,?,?)',
-                   (request_id, key_id, alias, now(), 'pending', estimate))
+        db.execute('INSERT INTO ledger(id,key_id,model,started,status,reserved,metering) VALUES(?,?,?,?,?,?,?)',
+                   (request_id, key_id, alias, now(), 'pending', estimate, key['mode']))
+        return estimate
 
 
-def settle(request_id, status, counts=(0, 0)):
+def settle(request_id, status, counts=None):
     with database(True) as db:
-        db.execute('UPDATE ledger SET status=?,input=?,output=?,requests=? WHERE id=? AND status=?',
-                   (status, *counts, int(status != 'rejected'), request_id, 'pending'))
+        row = db.execute("SELECT key_id,reserved,metering FROM ledger WHERE id=? AND status='pending'", (request_id,)).fetchone()
+        if not row:
+            return
+        recorded = counts or (0, 0)
+        charged = 0 if status == 'rejected' else sum(recorded)
+        if status in ('unknown', 'estimated'):
+            charged = max(charged, row['reserved'])
+        if row['metering'] == 'tokens' and charged > row['reserved']:
+            charged = row['reserved']
+            status = 'overrun'
+            db.execute('UPDATE keys SET token_hold=1 WHERE id=?', (row['key_id'],))
+        db.execute('UPDATE ledger SET status=?,input=?,output=?,requests=?,tokens_charged=? WHERE id=?',
+                   (status, *recorded, int(status != 'rejected'), charged, request_id))
 
 
 @app.post('/v1/chat/completions')
@@ -769,38 +893,39 @@ def infer(gemini=None):
             errors.append(str(exc))
     if not candidates:
         raise Problem(errors[0])
-    max_output = data.get('max_completion_tokens') or data.get('max_tokens') or data.get('max_output_tokens')
-    if source == 'gemini':
-        max_output = data.get('generationConfig', {}).get('maxOutputTokens')
-    if key['mode'] == 'tokens' and max_output is None:
-        max_output = 1024
-        for upstream, body in candidates:
-            if upstream['protocol'] == 'gemini':
-                body.setdefault('generationConfig', {})['maxOutputTokens'] = max_output
-            else:
-                body[{'chat':'max_completion_tokens','responses':'max_output_tokens','messages':'max_tokens'}[upstream['protocol']]] = max_output
-    if max_output is not None and not 1 <= int(max_output) <= 1048576:
+    max_output = protocols.output_limit(source, data)
+    if max_output is not None and (type(max_output) is not int or not 1 <= max_output <= 1048576):
         raise Problem('最大输出 Token 数超出范围')
-    estimate = len(request.get_data()) + int(max_output or 1024)
-    request_id = 'lr_' + secrets.token_hex(12)
     if not settings('proxy_updated'):
         candidates = [(upstream, body) for upstream, body in candidates if upstream['egress'] == 'direct']
     if not candidates:
         raise Problem('请等待管理员配置或刷新上游代理', 503)
-    reserve(key['id'], alias, request_id, estimate)
+    token_mode = key['mode'] == 'tokens'
+    if token_mode:
+        protocols.require_bounded_text(data, source)
+    input_budget = max(len(json.dumps(body, ensure_ascii=False).encode()) for _, body in candidates) + 128
+    request_id = 'lr_' + secrets.token_hex(12)
+    estimate = reserve(key['id'], alias, request_id, input_budget + (max_output or 1024), mode=key['mode'],
+                       min_estimate=input_budget + 16 if token_mode and max_output is None else None)
+    if token_mode:
+        for upstream, body in candidates:
+            protocols.cap_output(upstream['protocol'], body, estimate - input_budget)
     for upstream, body in candidates:
         target = upstream['protocol']
         try:
             client, response = upstream_call(upstream, 'POST', protocols.endpoint(target, upstream['model'], stream), body, True)
+        except ValueError:
+            settle(request_id, 'rejected')
+            raise Problem('上游 HTTPS 地址不可用', 503) from None
         except requests.ConnectTimeout:
             continue
         except requests.ConnectionError as exc:
             if 'ProxyError' == type(exc).__name__:
                 continue
-            settle(request_id, 'unknown', (estimate, 0))
+            settle(request_id, 'unknown')
             raise Problem('上游连接中断，调用结果未知', 503) from None
         except NETWORK_ERRORS:
-            settle(request_id, 'unknown', (estimate, 0))
+            settle(request_id, 'unknown')
             raise Problem('上游响应中断，调用结果未知', 503) from None
         if response.status_code >= 300:
             status = response.status_code
@@ -808,29 +933,29 @@ def infer(gemini=None):
             client.close()
             if status in (401, 403, 404, 429):
                 continue
-            settle(request_id, 'rejected' if status < 500 else 'unknown', (0 if status < 500 else estimate, 0))
+            settle(request_id, 'rejected' if status < 500 else 'unknown')
             raise Problem(f'上游返回 HTTP {status}', 400 if status in (400, 422) else 502)
         if stream:
-            return Response(wire_stream(client, response, source, target, alias, request_id, estimate),
+            return Response(wire_stream(client, response, source, target, alias, request_id),
                             mimetype='text/event-stream', headers={'X-Accel-Buffering': 'no'})
         try:
             with client, response:
                 obj = response.json()
             counts = protocols.usage(obj)
-            settle(request_id, 'complete', counts if sum(counts) else (estimate, 0))
+            settle(request_id, 'complete' if sum(counts) else 'estimated', counts)
             if source != target:
                 obj = protocols.result(source, request_id, alias, protocols.output_text(target, obj), counts)
             elif 'model' in obj:
                 obj['model'] = alias
             return jsonify(obj)
         except (NETWORK_ERRORS, ValueError):
-            settle(request_id, 'unknown', (estimate, 0))
+            settle(request_id, 'unknown')
             raise Problem('上游返回无效或不完整的数据', 502) from None
     settle(request_id, 'rejected')
     raise Problem('当前模型的上游或代理暂时不可用', 503)
 
 
-def wire_stream(client, response, source, target, alias, request_id, estimate):
+def wire_stream(client, response, source, target, alias, request_id):
     counts = (0, 0)
     completed = False
     rolling_text = []
@@ -878,7 +1003,7 @@ def wire_stream(client, response, source, target, alias, request_id, estimate):
     finally:
         response.close()
         client.close()
-        settle(request_id, 'complete' if completed else 'unknown', counts if sum(counts) else (estimate, 0))
+        settle(request_id, ('complete' if sum(counts) else 'estimated') if completed else 'unknown', counts)
 
 
 @app.get('/healthz')

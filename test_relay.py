@@ -3,6 +3,7 @@ import os
 import re
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 import requests
@@ -68,6 +69,39 @@ class RelayTest(unittest.TestCase):
             relay.reserve(key_id, 'example', 'concurrent', 20)
         relay.settle('first', 'complete', (3, 2))
         self.assertEqual(user.get('/account/keys').json[0]['tokens'], 5)
+        post(admin, a, relay.ADMIN_PATH + '/key', {'id': key_id, 'mode': 'tokens', 'quota': 350, 'models': ['example']})
+        upstream = requests.Response()
+        upstream.status_code = 200
+        upstream._content = b'{"usage":{"input_tokens":30,"output_tokens":9}}'
+        upstream._content_consumed = True
+        with patch.object(relay, 'upstream_call', return_value=(requests.Session(), upstream)) as forward:
+            response = user.post('/v1/responses', headers=headers, json={'model': 'example', 'input': 'Hello'})
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(16 <= forward.call_args.args[3]['max_output_tokens'] < 350)
+        self.assertEqual(user.get('/account/usage').json[0]['charged'], 39)
+        self.assertEqual(user.get('/account/keys').json[0]['tokens'], 44)
+        post(admin, a, relay.ADMIN_PATH + '/disconnect', {'id': 1})
+        self.assertEqual(user.get('/v1/models', headers=headers).json['data'], [])
+
+    def test_proxy_profiles_switch_and_fix(self):
+        relay = self.relay
+        feed = 'vless://dummy@proxy.example.com:443#test'
+        with patch.object(relay.egress, 'download', return_value=feed), \
+                patch.object(relay.CORE, 'cached_nodes', return_value=[feed]), \
+                patch.object(relay.CORE, 'configure', return_value=['node-test']):
+            relay.refresh_proxy('https://proxy.example.com/a', profile_id='new', label='First', via_proxy=False)
+            _, first = relay.proxy_profiles()
+            relay.reconfigure_proxy(['node-test'])
+            self.assertEqual(relay.settings('default_nodes'), ['node-test'])
+            relay.refresh_proxy('https://proxy.example.com/b', profile_id='new', label='Second', via_proxy=False)
+            all_profiles, second = relay.proxy_profiles()
+            self.assertNotEqual(first, second)
+            self.assertEqual(len(all_profiles), 2)
+            self.assertEqual(relay.settings('default_nodes'), [])
+            relay.refresh_proxy(profile_id=first)
+            self.assertEqual(relay.settings('default_nodes'), ['node-test'])
+            relay.reconfigure_proxy([])
+            self.assertEqual(relay.settings('default_nodes'), [])
 
     def test_subscription_formats(self):
         from egress import subscription
@@ -75,6 +109,51 @@ class RelayTest(unittest.TestCase):
         self.assertEqual(subscription(uri), [uri])
         self.assertEqual(subscription(base64.b64encode(uri.encode()).decode()), [uri])
         self.assertEqual(subscription('proxies: [{name: node, server: proxy.example.com, port: 443}]')[0]['port'], 443)
+
+    def test_token_quota_concurrent_and_provider_overrun(self):
+        relay = self.relay
+        with relay.database(True) as db:
+            owner = db.execute("SELECT id FROM users WHERE username='root'").fetchone()[0]
+            record = db.execute(
+                "INSERT INTO keys(owner,label,mode,quota,models) VALUES(?,'tokens','tokens',100,'[\"test\"]')",
+                (owner,),
+            ).lastrowid
+
+        def take(request_id):
+            try:
+                return relay.reserve(record, 'test', request_id, 80)
+            except relay.Problem as exc:
+                return exc.status
+
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            self.assertEqual(sorted(workers.map(take, ('quota-1', 'quota-2'))), [80, 429])
+        with relay.database() as db:
+            winner = db.execute('SELECT id FROM ledger WHERE key_id=?', (record,)).fetchone()[0]
+        relay.settle(winner, 'complete', (40, 65))
+        relay.settle(winner, 'complete', (40, 65))
+        with relay.database() as db:
+            key = next(k for k in relay.key_rows(db) if k['id'] == record)
+            self.assertEqual((key['tokens'], key['reported_tokens'], key['token_hold']), (80, 105, 1))
+        with self.assertRaises(relay.Problem):
+            relay.reserve(record, 'test', 'blocked', 1)
+        with relay.database(True) as db:
+            db.execute('UPDATE keys SET token_hold=0 WHERE id=?', (record,))
+        self.assertEqual(relay.reserve(record, 'test', 'recover', 64, min_estimate=16), 20)
+        relay.settle('recover', 'unknown', (2, 3))
+        with relay.database() as db:
+            key = next(k for k in relay.key_rows(db) if k['id'] == record)
+            self.assertEqual((key['tokens'], key['reported_tokens'], key['reserved_tokens']), (100, 110, 0))
+        with self.assertRaises(relay.Problem):
+            relay.reserve(record, 'test', 'exhausted', 1)
+
+    def test_usage_totals(self):
+        import protocols
+        protocols.require_bounded_text({'input': 'Hello', 'tools': [{'type':'function','name':'time'}]}, 'responses')
+        with self.assertRaises(ValueError):
+            protocols.require_bounded_text({'contents': [{'parts': [{'fileData': {}}]}]}, 'gemini')
+        self.assertEqual(protocols.usage({'usage': {'input_tokens': 6, 'cache_read_input_tokens': 3, 'output_tokens': 7}}), (9, 7))
+        self.assertEqual(protocols.usage({'usageMetadata': {'promptTokenCount': 9, 'candidatesTokenCount': 2,
+                                                            'thoughtsTokenCount': 4, 'totalTokenCount': 15}}), (9, 6))
 
     def test_converted_stream(self):
         import protocols

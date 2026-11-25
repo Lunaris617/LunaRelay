@@ -177,6 +177,18 @@ class Core:
                     proxies.setdefault(node['name'], node)
             return proxies
 
+    def cached_nodes(self):
+        config = self.path / 'config.yaml'
+        if not config.is_file():
+            return []
+        providers = yaml.safe_load(config.read_text(encoding='utf-8')).get('proxy-providers', {})
+        nodes = []
+        for provider in providers.values():
+            name = Path(provider['path']).name
+            if name.startswith('provider-') and name.endswith('.txt'):
+                nodes.extend(subscription((self.path / name).read_text(encoding='utf-8')))
+        return nodes
+
     def client(self, port):
         client = direct()
         proxy = f'http://{self.address}:{int(port)}'

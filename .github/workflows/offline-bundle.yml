@@ -16,6 +16,19 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build an offline Ubuntu 24.04 amd64 bundle
         run: bash build-offline.sh "$RUNNER_TEMP/lunarelay-ubuntu24-amd64.tar.gz"
+      - name: Verify the image archive and the package repository offline
+        run: |
+          cd "$RUNNER_TEMP"
+          sha256sum -c lunarelay-ubuntu24-amd64.tar.gz.sha256
+          tar -xf lunarelay-ubuntu24-amd64.tar.gz
+          docker load -i LunaRelay/images.tar
+          docker image inspect lunarelay-relay:offline caddy:2.10.2-alpine metacubex/mihomo:v1.19.34 >/dev/null
+          docker run --rm --network none --pull never -v "$RUNNER_TEMP/LunaRelay/debs:/debs:ro" ubuntu:24.04 bash -eu -c '
+            printf "deb [trusted=yes] file:/debs ./\n" >/tmp/lunarelay.list
+            opts=(-o Dir::Etc::sourcelist=/tmp/lunarelay.list -o Dir::Etc::sourceparts=- -o APT::Sandbox::User=root)
+            apt-get "${opts[@]}" update
+            apt-get "${opts[@]}" install --download-only --no-install-recommends -y docker.io docker-compose-v2 ca-certificates curl openssl iproute2 python3
+          '
       - uses: actions/upload-artifact@v4
         with:
           name: lunarelay-ubuntu24-amd64

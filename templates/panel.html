@@ -70,6 +70,7 @@ table{width:100%;border-collapse:collapse;margin:10px 0;text-align:left}th,td{pa
 <section><h2>我的 API Key</h2>
 <form action="/account/keys" data-key><label>Key 名称<input name="label" maxlength="80" required></label><button>申请 Key</button></form>
 <div id="keys" class="scroll"></div></section>
+<section><h2>最近用量</h2><div id="usage" class="scroll"></div></section>
 <section><h2>客户端接入</h2>
 <p>将本站 Key 填入客户端的 API Key 字段。创建后请联系管理员开通模型和配额。</p>
 <ul>
@@ -81,16 +82,18 @@ table{width:100%;border-collapse:collapse;margin:10px 0;text-align:left}th,td{pa
 {% else %}
 <nav><a href="#proxy">出站代理</a><a href="#upstreams">上游</a><a href="#routing">模型路由</a><a href="#approval">Key 审批</a><a href="#signup">注册设置</a></nav>
 <section id="proxy"><h2>出站代理</h2>
-<form action="{{ admin_path }}/proxy">
-<label>HTTPS 订阅链接<input name="url" type="password" autocomplete="off" placeholder="留空刷新已有订阅"></label>
-<label>下载方式<select name="via_proxy"><option value="">沿用当前设置</option><option value="proxy">通过默认代理组</option><option value="direct">HTTPS 直连</option></select></label><button>导入或刷新</button>
+<form action="{{ admin_path }}/proxy" id="proxy-form">
+<label>订阅方案<select name="profile" id="proxy-profiles"></select></label>
+<label>方案名称<input name="label" maxlength="60" placeholder="留空保留原名称"></label>
+<label>HTTPS 订阅链接<input name="url" type="password" autocomplete="off" placeholder="留空使用已有地址"></label>
+<label>下载方式<select name="via_proxy"><option value="">沿用现有配置</option><option value="proxy">通过当前代理组</option><option value="direct">HTTPS 直连</option></select></label><button>保存并启用</button>
 </form><div id="node-status" class="scroll"></div>
-<form action="{{ admin_path }}/defaults"><label>默认节点及顺序（逗号分隔 ID）<input name="nodes" placeholder="留空使用当前全部节点"></label><button>保存默认节点组</button></form>
+<form action="{{ admin_path }}/defaults" id="proxy-default-form"><label>默认出口<select name="nodes" id="proxy-nodes"></select></label><button>应用出口</button></form>
 </section>
 <section id="upstreams"><h2>上游服务</h2><div id="upstream-table" class="scroll"></div>
 <form action="{{ admin_path }}/upstream" id="upstream-form">
 <label>服务预设<select id="preset"><option value="">自定义</option>{% for name in providers %}<option>{{ name }}</option>{% endfor %}</select></label>
-<label>上游 ID（新增留空）<input type="number" name="id" min="1"></label>
+<label>上游<select name="id" id="upstream-edit"><option value="">新增上游</option></select></label>
 <label>名称<input name="name" required></label>
 <label>协议<select name="protocol"><option value="chat">Chat Completions</option><option value="responses">Responses</option><option value="messages">Anthropic Messages</option><option value="gemini">Gemini</option></select></label>
 <label>HTTPS 上游地址<input type="url" name="base" required></label>
@@ -98,6 +101,8 @@ table{width:100%;border-collapse:collapse;margin:10px 0;text-align:left}th,td{pa
 <label>出站方式<select name="egress"><option value="proxy">代理</option><option value="direct">HTTPS 直连</option></select></label>
 <label>专用节点及顺序（逗号分隔 ID）<input name="nodes" placeholder="留空使用默认组"></label>
 <label>启用<input type="checkbox" name="enabled" checked></label><button>保存上游</button></form>
+<form action="{{ admin_path }}/disconnect" data-confirm="断开会清除本站保存的上游 API Key，并暂停这个上游。">
+<label>断开上游<select name="id" class="upstream-select" required></select></label><button class="secondary">断开并清除 API Key</button></form>
 <form action="{{ admin_path }}/discover"><label>上游<select name="id" class="upstream-select" required></select></label><button>同步模型</button></form>
 <form action="{{ admin_path }}/probe"><label>上游<select name="id" class="upstream-select" required></select></label><label>模型名称<input name="model" list="model-options" required></label><button>测试真实调用</button></form>
 </section>
@@ -105,12 +110,14 @@ table{width:100%;border-collapse:collapse;margin:10px 0;text-align:left}th,td{pa
 <form action="{{ admin_path }}/route"><label>对外模型名<input name="alias" required></label><label>上游<select name="id" class="upstream-select" required></select></label><label>上游模型<input name="model" list="model-options" required></label><label>优先级（从小到大）<input name="priority" type="number" value="0"></label><label>删除此路由<input type="checkbox" name="remove"></label><button>应用</button></form>
 </section>
 <section id="approval"><h2>API Key 审批</h2><div id="keys" class="scroll"></div>
+<p>Token 配额按累计数量计算。请求先预留额度，完成后按厂商返回的用量结算。</p>
 <form action="{{ admin_path }}/key" id="approval-form"><label>Key<select name="id" id="key-options" required></select></label>
 <label>计量<select name="mode"><option value="requests">请求次数</option><option value="tokens">Token</option><option value="unlimited">无限量</option></select></label>
 <label>总配额<input name="quota" type="number" value="0" min="0"></label><label>有效期（留空长期有效）<input name="expires" type="datetime-local"></label>
 <label>授权模型（可多选）<select name="models" multiple id="allowed-options"></select></label>
 <label>启用<input name="enabled" type="checkbox" checked></label><button>保存审批</button></form>
 <form action="{{ admin_path }}/reveal" data-key><label>Key<select name="id" class="reveal-options" required></select></label><label>管理员当前密码<input name="password" type="password" required></label><button>查看完整 Key</button></form>
+<details><summary>查看最近用量</summary><div id="usage" class="scroll"></div></details>
 <details><summary>查看审计记录</summary><div id="audit" class="scroll"></div></details>
 </section>
 <section id="signup"><h2>开户与注册授权</h2><div id="users" class="scroll"></div>
@@ -166,6 +173,7 @@ function options(selector, values) {
     }
 }
 let keyRecords = [];
+let upstreamRecords = [];
 const approval = document.querySelector('#approval-form');
 approval?.elements.id.addEventListener('change', () => loadApproval());
 function loadApproval() {
@@ -183,25 +191,38 @@ async function refresh() {
     const management = Boolean(document.querySelector('#proxy'));
     const data = await call(management ? adminPath + '/data' : '/account/keys');
     const keys = management ? data.keys : data;
-    table('keys', ['ID','用户名','名称','前缀','计量','额度','已用请求','已用 Token','到期时间','模型','状态'],
+    const remaining = k => k.mode === 'unlimited' ? '∞' : Math.max(0, k.quota -
+        (k.mode === 'tokens' ? k.tokens + k.reserved_tokens : k.requests + k.pending_requests));
+    table('keys', ['ID','用户名','名称','前缀','计量','额度','可用','已用请求','已扣 Token','厂商报告 Token','到期时间','模型','状态'],
         keys.map(k => [k.id,k.username,k.label,k.prefix,({requests:'请求',tokens:'Token',unlimited:'无限量'})[k.mode],
-        k.mode === 'unlimited' ? '∞' : k.quota,k.requests,k.tokens,when(k.expires),list(k.models).join('、'),
-        !k.enabled ? '停用' : k.expires && k.expires*1000 <= Date.now() ? '已过期' : k.mode !== 'unlimited' && k.quota === 0 ? '待授权' : '已启用']));
+        k.mode === 'unlimited' ? '∞' : k.quota,remaining(k),k.requests,k.tokens,k.reported_tokens,when(k.expires),list(k.models).join('、'),
+        !k.enabled ? '停用' : k.token_hold ? '用量异常待审批' : k.expires && k.expires*1000 <= Date.now() ? '已过期' : k.mode !== 'unlimited' && remaining(k) === 0 ? '额度不足' : '已启用']));
+    const usage = management ? data.usage : await call('/account/usage');
+    const usageStatus = {pending:'处理中',complete:'已结算',estimated:'按预留结算',unknown:'用量待确认',rejected:'未扣额',overrun:'用量超过预留'};
+    table('usage',['时间','Key','模型','状态','预留 Token','厂商输入','厂商输出','实扣 Token'],usage.map(u =>
+        [when(u.started),u.prefix,u.model,usageStatus[u.status] || u.status,u.reserved,u.input,u.output,u.charged]));
     if (!management) return;
     keyRecords = keys;
+    upstreamRecords = data.upstreams;
     options('#key-options,.reveal-options', keys.map(k => [k.id,k.username+' / '+k.label+' / '+k.prefix]));
     options('#allowed-options', [...new Set(data.routes.map(r => r.alias))].map(m => [m,m]));
     loadApproval();
     options('.upstream-select', data.upstreams.map(u => [u.id,u.name]));
+    options('#upstream-edit', [['','新增上游'], ...data.upstreams.map(u => [u.id,u.name])]);
+    options('#proxy-profiles', [...data.profiles.map(p => [p.id,p.name + (p.id === data.active_profile?'（当前）':'')]),['new','新增订阅']]);
+    document.querySelector('#proxy-profiles').value = data.active_profile || 'new';
+    options('#proxy-nodes', [['','自动 · 优先健康 UDP'], ...data.nodes.map(n => [n.id,n.name + (n.alive?'':'（不可用）')])]);
+    document.querySelector('#proxy-nodes').value = data.default_nodes[0] || '';
     options('#model-options', [...new Set(data.models.map(r => r.model))].map(m => [m,m]));
     const nodeStatus = document.querySelector('#node-status');
     table('node-status',['节点 ID','名称','健康状态'],data.nodes.map(n => [n.id,n.name,n.alive?'可用':'待检或不可用']));
     const summary = document.createElement('p');
-    summary.textContent = '最近刷新 ' + when(data.proxy_updated) + ' · 当前出口 ' +
-      (Object.entries(data.exits).map(([n,v])=>n+': '+(v || '—')).join(' / ') || '—');
+    const current = data.active_node;
+    summary.textContent = '健康节点 ' + data.nodes.filter(n=>n.alive).length + '/' + data.nodes.length +
+        ' · 最近刷新 ' + when(data.proxy_updated) + ' · 当前出口 ' + (current || '—');
     nodeStatus.prepend(summary);
     table('upstream-table',['ID','名称','协议','地址','出站方式','节点','状态','五小时 / 每周用量'],data.upstreams.map(u =>
-        [u.id,u.name,u.protocol,u.base,u.egress==='direct'?'HTTPS 直连':'代理',list(u.nodes).join(', '),u.enabled?'启用':'停用',u.quota]));
+        [u.id,u.name,u.protocol,u.base,u.egress==='direct'?'HTTPS 直连':'代理',list(u.nodes).join(', '),!u.connected?'未连接':u.enabled?'启用':'停用',u.quota]));
     table('route-table',['公开模型','上游 ID','上游模型','优先级'],data.routes.map(r=>[r.alias,r.upstream,r.model,r.priority]));
     table('discovery',['上游 ID','已同步模型'],data.models.map(r=>[r.upstream,r.model]));
     table('invites',['ID','授权码','剩余次数','到期时间','状态','备注'],data.invites.map(i=>
@@ -219,6 +240,16 @@ document.querySelector('#preset')?.addEventListener('change', e => {
         form.elements.egress.value = ['DeepSeek','Kimi'].includes(e.target.value) ? 'direct' : 'proxy';
     }
 });
+document.querySelector('#upstream-edit')?.addEventListener('change', event => {
+    const form = document.querySelector('#upstream-form');
+    const item = upstreamRecords.find(u => String(u.id) === event.target.value);
+    for (const field of ['name','base','secret']) form.elements[field].value = item?.[field] || '';
+    form.elements.protocol.value = item?.protocol || 'chat';
+    form.elements.egress.value = item?.egress || 'proxy';
+    form.elements.nodes.value = item ? list(item.nodes).join(', ') : '';
+    form.elements.enabled.checked = item?.connected ? Boolean(item.enabled) : true;
+    document.querySelector('#preset').value = '';
+});
 document.querySelector('#logout')?.addEventListener('click', async () => { await call('/session/logout', {}); location.reload(); });
 window.addEventListener('load', () => {
     if (sitekey && window.turnstile) for (const form of document.querySelectorAll('[data-challenge]')) {
@@ -227,6 +258,7 @@ window.addEventListener('load', () => {
 });
 for (const form of document.querySelectorAll('form')) form.addEventListener('submit', async event => {
     event.preventDefault();
+    if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) return;
     const button = form.querySelector('button');
     button.disabled = true;
     try {

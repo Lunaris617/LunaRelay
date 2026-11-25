@@ -46,9 +46,13 @@ sudo bash install.sh --domain relay.example.com
 | Gemini | `POST /v1beta/models/{model}:generateContent` 和 `:streamGenerateContent?alt=sse` |
 | 授权模型目录 | `GET /v1/models` 或 Gemini `GET /v1beta/models` |
 
-根据客户端使用 Bearer、`x-api-key` 或 `x-goog-api-key`。Codex 选择 Responses，Claude Code 选择 Anthropic，Gemini CLI 选择 Gemini，Grok Build 和 Kimi CLI 可通过自定义兼容提供商接入。工具调用使用客户端与上游协议一致的路由。跨协议路由支持文本和文本流。缺少上游 Token 用量时，账本按预留的保守估算量结算。
+根据客户端使用 Bearer、`x-api-key` 或 `x-goog-api-key`。Codex 选择 Responses，Claude Code 选择 Anthropic，Gemini CLI 选择 Gemini，Grok Build 和 Kimi CLI 可通过自定义兼容提供商接入。工具调用使用客户端与上游协议一致的路由。跨协议路由支持文本和文本流。
+
+Token 配额是每把 Key 的累计用量。请求开始时在数据库事务中按请求体估算和输出上限预留额度。已结算与并发预留的总量达到配额后，新请求返回 429。正常完成按厂商报告的输入和输出结算，包含厂商明确报告的缓存或思考 Token。缺少完整用量或上游结果未知时按预留量结算。厂商报告超出预留时，本站扣额最多为该请求的预留量，单独保留厂商原始用量并暂停该 Key，管理员复核后可重新审批。Token 配额入口仅支持完整文本上下文和客户端函数工具。
 
 管理后台和用户服务台使用独立的 HTTPS 入口。每个上游可选代理或 HTTPS 直连。DeepSeek 和 Kimi 预设使用直连，其他预设使用代理。两种方式都校验模型厂商的 HTTPS 证书，代理故障时该上游保持代理模式。订阅可通过当前代理组下载和定时刷新。默认组优先选择健康的 UDP 节点，同组按探测延迟选择，UDP 组不可用时切换到其他健康节点；显式指定的节点列表按配置顺序切换。
+
+管理面板可保存多个订阅并启用其中一个。默认出口支持自动选路和固定一个节点。断开上游会清除本站保存的凭据，保留模型路由以便使用新凭据重新连接。
 
 ## 运维
 
