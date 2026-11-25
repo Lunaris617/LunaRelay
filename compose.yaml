@@ -5,15 +5,15 @@ services:
     environment:
       ADMIN_PATH: ${ADMIN_PATH:?run install.sh}
       ADMIN_PORT: ${ADMIN_PORT:?run install.sh}
-      MIHOMO_STATE: /mihomo
+      MIHOMO_STATE: /mihomo-state
       MIHOMO_SECRET: ${MIHOMO_SECRET:?run install.sh}
-    volumes: ["./state/relay:/state", "./state/mihomo:/mihomo"]
+    volumes: ["./state/relay:/state", "./state/mihomo:/mihomo-state"]
     networks: [web, proxy]
   mihomo:
     image: ${MIHOMO_IMAGE:-metacubex/mihomo:v1.19.34}
-    command: ["-d", "/mihomo", "-f", "/mihomo/config.yaml"]
+    command: ["-d", "/mihomo-state", "-f", "/mihomo-state/config.yaml"]
     restart: unless-stopped
-    volumes: ["./state/mihomo:/mihomo"]
+    volumes: ["./state/mihomo:/mihomo-state"]
     networks: [proxy]
   caddy:
     image: ${CADDY_IMAGE:-caddy:2.10.2-alpine}

@@ -124,7 +124,7 @@ class Core:
         }
         self.write('candidate.yaml', yaml.safe_dump(config, allow_unicode=True))
         with direct() as client:
-            response = client.put(self.api + '/configs?force=true', json={'path': '/mihomo/candidate.yaml'},
+            response = client.put(self.api + '/configs?force=true', json={'path': '/mihomo-state/candidate.yaml'},
                                   headers={'Authorization': 'Bearer ' + self.secret}, timeout=15)
         if response.status_code >= 300:
             raise ValueError('Mihomo 校验失败，请检查订阅节点格式')
