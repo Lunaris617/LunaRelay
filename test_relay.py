@@ -42,7 +42,6 @@ class RelayTest(unittest.TestCase):
         a = csrf(admin, relay.ADMIN_PATH)
         initial = (relay.STATE / 'bootstrap-password').read_text().strip()
         post(admin, a, '/session/login', {'username': 'root', 'password': initial})
-        post(admin, a, '/session/password', {'old': initial, 'password': 'testing admin password'})
         post(admin, a, relay.ADMIN_PATH + '/user', {'username': 'tester', 'display': 'Tester', 'password': 'temporary password'})
         u = csrf(user, '/')
         post(user, u, '/session/login', {'username': 'tester', 'password': 'temporary password'})

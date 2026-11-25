@@ -121,8 +121,16 @@ with database() as db:
             with (STATE / 'bootstrap-password').open('x', encoding='utf-8') as handle:
                 handle.write(initial + '\n')
             (STATE / 'bootstrap-password').chmod(0o600)
-        db.execute("INSERT INTO users(username,display,password,admin,change_password) VALUES('root','管理员',?,1,1)",
+        db.execute("INSERT INTO users(username,display,password,admin) VALUES('root','管理员',?,1)",
                    (PASSWORDS.hash(initial),))
+    elif (STATE / 'bootstrap-password').is_file():
+        legacy_root = db.execute("SELECT id,password FROM users WHERE username='root' AND admin=1 AND change_password=1").fetchone()
+        if legacy_root:
+            try:
+                if PASSWORDS.verify(legacy_root['password'], (STATE / 'bootstrap-password').read_text().strip()):
+                    db.execute('UPDATE users SET change_password=0 WHERE id=?', (legacy_root['id'],))
+            except (InvalidHashError, VerificationError):
+                pass
     if 'egress' not in {row[1] for row in db.execute('PRAGMA table_info(upstreams)')}:
         db.execute("ALTER TABLE upstreams ADD COLUMN egress TEXT NOT NULL DEFAULT 'proxy'")
     if not os.getenv('RELAY_MAINTENANCE'):

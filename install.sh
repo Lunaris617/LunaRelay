@@ -3,21 +3,39 @@ set -euo pipefail
 umask 077
 cd "$(dirname "$(realpath "$0")")"
 
-domain="" ip="" admin_port=""
+domain="" ip="" admin_port="" offline=0
 while (( $# )); do
     case "$1" in
         --domain) domain="${2:?Missing domain}"; shift 2 ;;
         --ip) ip="${2:?Missing public IP}"; shift 2 ;;
         --admin-port) admin_port="${2:?Missing administration port}"; shift 2 ;;
-        *) printf 'Usage: sudo bash install.sh [--domain HOST | --ip IPv4] [--admin-port PORT]\n'; exit 2 ;;
+        --offline) offline=1; shift ;;
+        *) printf 'Usage: sudo bash install.sh [--offline] [--domain HOST | --ip IPv4] [--admin-port PORT]\n'; exit 2 ;;
     esac
 done
 (( EUID == 0 )) || { printf 'Run this installer with sudo.\n' >&2; exit 1; }
+if (( offline )); then
+    [[ -f images.tar && -f debs/Packages.gz ]] || { printf 'Incomplete offline bundle.\n' >&2; exit 1; }
+    . /etc/os-release
+    [[ "$ID" == ubuntu && "$VERSION_ID" == 24.04 && "$(uname -m)" == x86_64 ]] ||
+        { printf 'This offline bundle requires Ubuntu 24.04 amd64.\n' >&2; exit 1; }
+fi
 if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then
     . /etc/os-release
     [[ "$ID" == ubuntu ]] || { printf 'Install Docker and Compose first.\n' >&2; exit 1; }
-    apt-get -o Acquire::Retries=1 update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io docker-compose-v2 ca-certificates curl
+    if (( offline )); then
+        export DEBIAN_FRONTEND=noninteractive
+        repo="$(mktemp -d)"
+        trap 'rm -rf -- "$repo"' EXIT
+        printf 'deb [trusted=yes] file:%s/debs ./\n' "$PWD" >"$repo/lunarelay.list"
+        opts=(-o "Dir::Etc::sourcelist=$repo/lunarelay.list" -o Dir::Etc::sourceparts=-
+              -o "Dir::State::lists=$repo/lists" -o APT::Sandbox::User=root)
+        apt-get "${opts[@]}" update
+        apt-get "${opts[@]}" install -y --no-install-recommends docker.io docker-compose-v2 ca-certificates curl openssl iproute2 python3
+    else
+        apt-get -o Acquire::Retries=1 update
+        DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io docker-compose-v2 ca-certificates curl
+    fi
     systemctl enable --now docker
 fi
 
@@ -69,7 +87,13 @@ shutil.copy2(".env", target / "deployment.env")
 PY
 fi
 docker compose config --quiet
-docker compose up -d --build
+if (( offline )); then
+    docker load -i images.tar
+    export RELAY_IMAGE=lunarelay-relay:offline
+    docker compose up -d --no-build --pull never
+else
+    docker compose up -d --build
+fi
 for attempt in {1..25}; do
     if docker compose exec -T relay python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8080/healthz",timeout=2)' 2>/dev/null; then
         printf 'Customer service: https://%s/\nAdministration: https://%s:%s/%s\n' \

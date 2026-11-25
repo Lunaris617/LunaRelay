@@ -1,0 +1,26 @@
+name: Offline installer
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build an offline Ubuntu 24.04 amd64 bundle
+        run: bash build-offline.sh "$RUNNER_TEMP/lunarelay-ubuntu24-amd64.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lunarelay-ubuntu24-amd64
+          path: |
+            ${{ runner.temp }}/lunarelay-ubuntu24-amd64.tar.gz
+            ${{ runner.temp }}/lunarelay-ubuntu24-amd64.tar.gz.sha256
+          compression-level: 0
+          if-no-files-found: error

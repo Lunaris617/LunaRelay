@@ -1,5 +1,6 @@
 services:
   relay:
+    image: ${RELAY_IMAGE:-lunarelay-relay:local}
     build: .
     restart: unless-stopped
     environment:

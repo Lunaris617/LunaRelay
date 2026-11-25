@@ -5,3 +5,4 @@ state/
 *.sqlite*
 instance/
 wheelhouse/
+lunarelay-ubuntu24-amd64.tar.gz*
